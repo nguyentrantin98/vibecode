@@ -273,7 +273,14 @@ pub async fn clear_cache() -> Res<()> {
 /* ---------------- ad blocking (uBlock Origin Lite) ---------------- */
 
 /// What the shield button says: "uBlock Origin Lite 2026.1116.1650", "Downloading uBlock Origin Lite…", an error.
-static ADBLOCK_STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(format!("Downloading {}…", crate::adblock::NAME)));
+static ADBLOCK_STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| {
+    // the adblock module is Windows-only (WebView2 extensions): macOS builds must not name it
+    #[cfg(windows)]
+    let s = format!("Downloading {}…", crate::adblock::NAME);
+    #[cfg(not(windows))]
+    let s = "Ad blocking is only available on Windows.".to_owned();
+    Mutex::new(s)
+});
 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn set_adblock_status(s: String) {
