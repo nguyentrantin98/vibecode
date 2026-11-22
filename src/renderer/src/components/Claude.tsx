@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, FileText, Gauge, Image as ImageIcon, ListChecks, MessageSquare, Monitor, Copy, Download, GitCommitHorizontal, Shield, ShieldOff, History, Plus, RefreshCw, RotateCcw, Sparkles, Play, FastForward, Upload, Paperclip, Square, SquareTerminal, Trash2, X, ExternalLink, Ellipsis, FolderOpen, FlaskConical, ScanSearch, Shrink } from 'lucide-react'
+import { Check, ChevronDown, FileText, Gauge, Image as ImageIcon, ListChecks, MessageSquare, Monitor, Copy, Download, GitCommitHorizontal, Shield, ShieldOff, History, Plus, RefreshCw, RotateCcw, Sparkles, Play, FastForward, Upload, Paperclip, Square, SquareTerminal, Trash2, X, ExternalLink, Ellipsis, FolderOpen, FlaskConical, ScanSearch, Shrink, KeyRound } from 'lucide-react'
 import { useStore, type Chat } from '../store'
 import { SlidePill, useEnterAnimation } from './motion'
 import {
@@ -20,7 +20,8 @@ import {
   folderKey,
   loadProjectBypass,
   toggleProjectBypass,
-  toggleDesktop
+  toggleDesktop,
+  setClaudeApiKey
 } from '../actions'
 import { attachTerm, detachTerm, fitTerm, focusTerm, writeToTerm } from '../terminals'
 import { Logo, StatusDot, statusText } from './icons'
@@ -35,6 +36,7 @@ import { NewChatMenu } from './AgentMenu'
 import { AGENTS, agentDef } from '../../../shared/agents'
 import { useT } from '../i18n'
 import type { T } from '../i18n'
+import type { ClaudeApiKey } from '../../../shared/types'
 
 export function TerminalView({ id, autoFocus = true }: { id: string; autoFocus?: boolean }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -427,6 +429,85 @@ function TokenMenu({ chat, at, onClose }: { chat: Chat; at: { left: number; bott
   )
 }
 
+/** The Anthropic API key all Claude chats can run on when the plan's usage limit is reached. */
+function ApiKeyMenu({ at, state, onChange, onClose }: { at: { left: number; bottom: number }; state: ClaudeApiKey | null; onChange: (s: ClaudeApiKey) => void; onClose: () => void }): React.JSX.Element {
+  const tl = useT()
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const close = (e: MouseEvent): void => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', close)
+    window.addEventListener('keydown', esc)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', esc)
+    }
+  }, [onClose])
+
+  const apply = async (o: { key?: string; on?: boolean }): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try {
+      onChange(await setClaudeApiKey(o))
+      setKey('')
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="tok-menu" ref={ref} style={{ left: at.left, bottom: at.bottom }} role="dialog">
+      <div className="sb-menu-title">{tl('Anthropic API key (all Claude chats)', 'API key Anthropic (mọi chat Claude)')}</div>
+      <div className="key-note">
+        {tl(
+          "For when your plan's usage limit is reached: Claude chats run on the key instead, billed per token to its Console account. Open chats restart (same conversations).",
+          'Dùng khi gói của bạn hết lượt: các chat Claude chạy bằng key này, tính phí theo token vào tài khoản Console của key. Các chat đang mở sẽ khởi động lại (giữ nguyên hội thoại).'
+        )}
+      </div>
+      {state?.hint && (
+        <label className="tok-row">
+          <input type="checkbox" checked={state.on} disabled={busy} onChange={() => void apply({ on: !state.on })} />
+          <span className="tok-name">
+            {tl('Use the key', 'Dùng key')} <code>{state.hint}</code>
+          </span>
+          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={(e) => (e.preventDefault(), void apply({ key: '' }))}>
+            {tl('Remove', 'Xoá')}
+          </button>
+        </label>
+      )}
+      <form
+        className="key-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (key.trim()) void apply({ key })
+        }}
+      >
+        <input
+          className="key-input"
+          type="password"
+          autoFocus
+          placeholder={state?.hint ? tl('New key: sk-ant-…', 'Key mới: sk-ant-…') : 'sk-ant-…'}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+        <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !key.trim()}>
+          {tl('Save & use', 'Lưu & dùng')}
+        </button>
+      </form>
+      {error && <div className="key-error">{error}</div>}
+    </div>
+  )
+}
+
 interface MoreItem {
   key: string
   icon: React.JSX.Element
@@ -456,9 +537,18 @@ function MoreMenu({ chat, onDone }: { chat: Chat; onDone: () => void }): React.J
   const t = useT()
   const [open, setOpen] = useState(false)
   const [tokensAt, setTokensAt] = useState<{ left: number; bottom: number } | null>(null)
+  const [keyAt, setKeyAt] = useState<{ left: number; bottom: number } | null>(null)
+  const [apiKey, setApiKey] = useState<ClaudeApiKey | null>(null)
   const [copied, setCopied] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const btn = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (open)
+      window.api.claude
+        .apiKey()
+        .then(setApiKey)
+        .catch(() => {})
+  }, [open])
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent): void => {
@@ -565,6 +655,20 @@ function MoreMenu({ chat, onDone }: { chat: Chat; onDone: () => void }): React.J
             setTokensAt({ left: Math.max(8, Math.min(r.left, window.innerWidth - 328)), bottom: window.innerHeight - r.top + 6 })
           }
         },
+        isClaude && {
+          key: 'apikey',
+          icon: <KeyRound size={14} />,
+          label: t('API key', 'API key'),
+          hint: apiKey?.on
+            ? t(`On for all Claude chats · ${apiKey.hint}`, `Đang bật cho mọi chat Claude · ${apiKey.hint}`)
+            : t("Run on your own key when the plan's limit is reached", 'Chạy bằng key riêng khi gói hết lượt'),
+          on: !!apiKey?.on,
+          run: () => {
+            const r = btn.current!.getBoundingClientRect()
+            setOpen(false)
+            setKeyAt({ left: Math.max(8, Math.min(r.left, window.innerWidth - 328)), bottom: window.innerHeight - r.top + 6 })
+          }
+        },
         isClaude &&
           window.api.platform === 'win32' && {
             key: 'desktop',
@@ -611,6 +715,7 @@ function MoreMenu({ chat, onDone }: { chat: Chat; onDone: () => void }): React.J
         </div>
       )}
       {tokensAt && <TokenMenu chat={chat} at={tokensAt} onClose={() => setTokensAt(null)} />}
+      {keyAt && <ApiKeyMenu at={keyAt} state={apiKey} onChange={setApiKey} onClose={() => setKeyAt(null)} />}
     </div>
   )
 }

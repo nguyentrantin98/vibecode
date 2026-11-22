@@ -13,6 +13,7 @@ import type {
   ChatLog,
   ChatTask,
   WebExtension,
+  ClaudeApiKey,
   ClaudeInfo,
   DbColumn,
   DbConnection,
@@ -113,7 +114,10 @@ export const api = {
     usage: (): Promise<UsageLimit[] | null> => invoke('claude_usage'),
     memory: (): Promise<{ usedBytes: number; totalBytes: number } | null> => invoke('sys_memory'),
     getProjectBypass: (folder: string): Promise<boolean> => invoke('claude_get_project_bypass', { folder }),
-    setProjectBypass: (folder: string, on: boolean): Promise<boolean> => invoke('claude_set_project_bypass', { folder, on })
+    setProjectBypass: (folder: string, on: boolean): Promise<boolean> => invoke('claude_set_project_bypass', { folder, on }),
+    apiKey: (): Promise<ClaudeApiKey> => invoke('claude_api_key'),
+    /** `key`: a new key ('' removes it, left out keeps the saved one); `on`: Claude chats use it */
+    setApiKey: (o: { key?: string; on?: boolean }): Promise<ClaudeApiKey> => invoke('claude_set_api_key', o)
   },
   browser: {
     /** create (hidden) the native page for one Web tab */

@@ -4447,6 +4447,37 @@ button.sb-item.sb-update:hover {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
+.key-note {
+  padding: 2px 8px 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.key-form {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px 4px;
+}
+.key-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-1);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+.key-input:focus {
+  border-color: var(--accent);
+}
+.key-error {
+  padding: 2px 8px 4px;
+  font-size: 11.5px;
+  color: var(--red);
+}
 .tok-foot {
   display: flex;
   align-items: center;

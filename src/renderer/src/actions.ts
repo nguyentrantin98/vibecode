@@ -2,7 +2,7 @@ import { clearAttachments } from './attachments'
 import { basename, uid, useStore, type Chat, type EditorTab, type WebTab } from './store'
 import { createTerm, disposeTerm, focusTerm, onTerminalEvents, readScreen, restartTerm, setTerminalClear, setTerminalTheme, writeToTerm, readScreenTail } from './terminals'
 import { disposeModel, hasUnsaved } from './fileModelsLite'
-import type { SessionInfo } from '../../shared/types'
+import type { ClaudeApiKey, SessionInfo } from '../../shared/types'
 import { AGENTS, agentDef, type AgentId } from '../../shared/agents'
 import { tr } from './i18n'
 
@@ -640,6 +640,29 @@ export async function toggleDesktop(id: string): Promise<void> {
   st().patchChat(id, { desktop: on || undefined })
   remember(DESKTOP_KEY, on ? '1' : '')
   restartChat(id)
+}
+
+/**
+ * Save / remove the Anthropic API key or switch it on / off (all Claude chats: for when the plan's
+ * usage limit is reached), then restart the open Claude chats — same conversations — so they
+ * run on the key, or back on the plan's login.
+ */
+export async function setClaudeApiKey(o: { key?: string; on?: boolean }): Promise<ClaudeApiKey> {
+  const before = await window.api.claude.apiKey().catch(() => null)
+  const after = await window.api.claude.setApiKey(o)
+  const changed = (before?.on ?? false) !== after.on || (after.on && o.key !== undefined)
+  const open = st().chats.filter((c) => agentDef(c.agent).id === 'claude' && c.status !== 'exited')
+  if (!changed || !open.length) return after
+  const busy = open.some((c) => c.status === 'working')
+  if (
+    busy &&
+    !(await window.api.ask(
+      tr('Some Claude chats are still working. Restart the open Claude chats now to switch?', 'Một số chat Claude vẫn đang làm việc. Khởi động lại các chat Claude đang mở ngay để chuyển?')
+    ))
+  )
+    return after
+  for (const c of open) restartChat(c.id)
+  return after
 }
 
 /** Switch model live (`/model`) for this chat. */

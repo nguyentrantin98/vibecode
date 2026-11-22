@@ -407,6 +407,8 @@ fn pty_spawn(call: *ipc.Call, args: struct { opts: SpawnOptions, out: ipc.Channe
     try env.put("TERM", "xterm-256color");
     try env.put("COLORTERM", "truecolor");
     try env.put("FORCE_COLOR", "1");
+    // the API key the user turned on for when the plan's limit is reached
+    if (claude and @hasDecl(m.appcmds, "claudeApiKey")) if (m.appcmds.claudeApiKey(a, &env)) |key| try env.put("ANTHROPIC_API_KEY", key);
 
     var fail: core.Fail = .{};
     start(a, o.id, argv, cwd, &env, o.cols, o.rows, args.out, &fail) catch |e| return call.failMsg(fail.text(e));

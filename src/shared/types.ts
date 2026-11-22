@@ -139,6 +139,14 @@ export interface UsageLimit {
   resetsAt: string | null
 }
 
+/** The Anthropic API key Claude chats can run on instead of the plan's login */
+export interface ClaudeApiKey {
+  /** "sk-ant-…abcd" — never the whole key; null = none saved */
+  hint: string | null
+  /** new (and restarted) Claude chats start with it */
+  on: boolean
+}
+
 export interface AgentInfo {
   id: AgentId
   found: boolean

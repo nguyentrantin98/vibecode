@@ -16,6 +16,8 @@ pub const commands = .{
     .{ "sys_memory", sys_memory },
     .{ "claude_get_project_bypass", claude_get_project_bypass },
     .{ "claude_set_project_bypass", claude_set_project_bypass },
+    .{ "claude_api_key", claude_api_key },
+    .{ "claude_set_api_key", claude_set_api_key },
     .{ "app_settings", app_settings },
     .{ "app_remember_folder", app_remember_folder },
     .{ "app_set_settings", app_set_settings },
@@ -135,6 +137,121 @@ fn claude_set_project_bypass(c: *ipc.Call, a: struct { folder: []const u8, on: b
     try aw.writer.writeByte('\n');
     try core.writeFile(try std.fs.path.join(c.arena, &.{ a.folder, ".claude", "settings.local.json" }), aw.written());
     return a.on;
+}
+
+// ---------------- API key ----------------
+
+/// An Anthropic API key Claude chats can run on instead of the plan's login (when its usage limit
+/// is reached): `<userData>/claude-api-key.json`, the key sealed like the other secrets.
+const ApiKeyFile = struct { key: []const u8 = "", on: bool = false };
+
+const ApiKeyState = struct {
+    /// "sk-ant-…abcd" (never the whole key); null = no key saved
+    hint: ?[]const u8 = null,
+    /// new Claude chats start with the key
+    on: bool = false,
+};
+
+fn apiKeyPath(a: Allocator) ![]u8 {
+    return core.dataPath(a, &.{"claude-api-key.json"});
+}
+
+fn readApiKeyFile(a: Allocator) ApiKeyFile {
+    const raw = core.readFileAlloc(a, apiKeyPath(a) catch return .{}, 64 << 10) catch return .{};
+    return core.fromJson(ApiKeyFile, a, raw) catch .{};
+}
+
+fn openApiKey(a: Allocator, f: ApiKeyFile) ?[]u8 {
+    if (f.key.len == 0 or !@hasDecl(m.secure, "openStr")) return null;
+    return m.secure.openStr(a, f.key) catch null;
+}
+
+fn apiKeyState(a: Allocator, f: ApiKeyFile) !ApiKeyState {
+    // a key that can't be opened any more (another Windows user / machine) counts as none
+    const key = openApiKey(a, f) orelse return .{};
+    return .{ .hint = try std.fmt.allocPrint(a, "{s}…{s}", .{ key[0..@min(7, key.len)], key[key.len -| 4..] }), .on = f.on };
+}
+
+/// The key a Claude chat starts with (as ANTHROPIC_API_KEY), or null when it is off. Also makes
+/// sure Claude Code takes it: an interactive `claude` ignores the variable until the key is
+/// approved in its global config (it asks once, and remembers a "No" for good). `env`: the
+/// chat's environment (it decides which config that is).
+pub fn claudeApiKey(a: Allocator, env: *const std.process.Environ.Map) ?[]u8 {
+    const f = readApiKeyFile(a);
+    if (!f.on) return null;
+    const key = openApiKey(a, f) orelse return null;
+    approveApiKey(a, env, key) catch |e| std.log.warn("approving the API key in .claude.json: {s}", .{@errorName(e)});
+    return key;
+}
+
+/// Claude Code's global config: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`.
+fn claudeGlobalConfig(a: Allocator, env: *const std.process.Environ.Map) ![]u8 {
+    return std.fs.path.join(a, &.{ env.get("CLAUDE_CONFIG_DIR") orelse core.home(), ".claude.json" });
+}
+
+/// Puts the key's last 20 characters (what Claude Code keeps of it) in
+/// `customApiKeyResponses.approved` and out of `.rejected`. Writes only when that changes it.
+fn approveApiKey(a: Allocator, env: *const std.process.Environ.Map, key: []const u8) !void {
+    const path = try claudeGlobalConfig(a, env);
+    const raw = try core.readFileAlloc(a, path, 64 << 20);
+    const out = (try approvedConfig(a, raw, key)) orelse return;
+    try core.writeAtomic(path, out);
+}
+
+/// `raw` with `key` approved, or null when it already is. Numbers stay as they were written.
+fn approvedConfig(a: Allocator, raw: []const u8, key: []const u8) !?[]u8 {
+    const trimmed = std.mem.trim(u8, key, " \t\r\n");
+    const tail = trimmed[trimmed.len -| 20..];
+    // never rewrite a file we can't parse: it holds the user's whole Claude Code state
+    var cfg = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .parse_numbers = false });
+    if (cfg != .object) return error.NotAnObject;
+    var resp: Value = if (field(cfg, "customApiKeyResponses")) |r| (if (r == .object) r else .{ .object = .empty }) else .{ .object = .empty };
+    var approved: Value = if (field(resp, "approved")) |v| (if (v == .array) v else .{ .array = .init(a) }) else .{ .array = .init(a) };
+    var rejected: Value = if (field(resp, "rejected")) |v| (if (v == .array) v else .{ .array = .init(a) }) else .{ .array = .init(a) };
+
+    var changed = for (approved.array.items) |v| {
+        if (v == .string and std.mem.eql(u8, v.string, tail)) break false;
+    } else true;
+    if (changed) try approved.array.append(.{ .string = tail });
+    var i: usize = 0;
+    while (i < rejected.array.items.len) {
+        const v = rejected.array.items[i];
+        if (v == .string and std.mem.eql(u8, v.string, tail)) {
+            _ = rejected.array.orderedRemove(i);
+            changed = true;
+        } else i += 1;
+    }
+    if (!changed) return null;
+
+    try resp.object.put(a, "approved", approved);
+    try resp.object.put(a, "rejected", rejected);
+    try cfg.object.put(a, "customApiKeyResponses", resp);
+    var aw: std.Io.Writer.Allocating = .init(a);
+    try std.json.Stringify.value(cfg, .{ .whitespace = .indent_2 }, &aw.writer);
+    return aw.written();
+}
+
+fn claude_api_key(c: *ipc.Call) !ApiKeyState {
+    return apiKeyState(c.arena, readApiKeyFile(c.arena));
+}
+
+/// `key`: a new key ("" removes it; null keeps the saved one). `on`: whether new Claude chats use it.
+fn claude_set_api_key(c: *ipc.Call, a: struct { key: ?[]const u8 = null, on: ?bool = null }) !ApiKeyState {
+    var f = readApiKeyFile(c.arena);
+    if (a.key) |k| {
+        const key = std.mem.trim(u8, k, " \t\r\n");
+        if (key.len == 0) {
+            f = .{};
+        } else {
+            if (!std.mem.startsWith(u8, key, "sk-ant-"))
+                return c.failMsg(settings.tr("That is not an Anthropic API key (they start with sk-ant-).", "Đây không phải API key của Anthropic (key bắt đầu bằng sk-ant-)."));
+            if (!@hasDecl(m.secure, "sealStr")) return c.fail("the secure module is not built in", .{});
+            f = .{ .key = try m.secure.sealStr(c.arena, key), .on = true };
+        }
+    }
+    if (a.on) |on| f.on = on and f.key.len > 0;
+    try core.writeAtomic(try apiKeyPath(c.arena), try core.toJson(c.arena, f));
+    return apiKeyState(c.arena, f);
 }
 
 // ---------------- system memory ----------------
@@ -400,4 +517,42 @@ test "imageMime" {
     try std.testing.expectEqualStrings("image/jpeg", imageMime("C:\\x\\Photo.JPG").?);
     try std.testing.expect(imageMime("notes.txt") == null);
     try std.testing.expect(imageMime("noext") == null);
+}
+
+test "approvedConfig" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const key = "sk-ant-api03-0123456789abcdefghijKLMNOPQRSTUVWXYZ";
+    const tail = "ghijKLMNOPQRSTUVWXYZ";
+
+    // added; the other keys and the way numbers were written stay
+    const out = (try approvedConfig(a, "{\"n\": 0.10, \"big\": 12345678901234567890, \"customApiKeyResponses\": {\"approved\": [\"x\"], \"rejected\": [\"" ++ tail ++ "\"]}}", key)).?;
+    try std.testing.expectEqualStrings(
+        \\{
+        \\  "n": 0.10,
+        \\  "big": 12345678901234567890,
+        \\  "customApiKeyResponses": {
+        \\    "approved": [
+        \\      "x",
+        \\      "ghijKLMNOPQRSTUVWXYZ"
+        \\    ],
+        \\    "rejected": []
+        \\  }
+        \\}
+    , out);
+    // already approved: nothing to write
+    try std.testing.expect(try approvedConfig(a, out, key) == null);
+    // no responses yet
+    try std.testing.expectEqualStrings(
+        \\{
+        \\  "customApiKeyResponses": {
+        \\    "approved": [
+        \\      "ghijKLMNOPQRSTUVWXYZ"
+        \\    ],
+        \\    "rejected": []
+        \\  }
+        \\}
+    , (try approvedConfig(a, "{}", key)).?);
+    try std.testing.expectError(error.NotAnObject, approvedConfig(a, "[]", key));
 }
