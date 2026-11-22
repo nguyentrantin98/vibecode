@@ -10,7 +10,7 @@ const run = (cmd, opts = {}) => execSync(cmd, { cwd: root, stdio: 'inherit', ...
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8')
 const write = (f, s) => fs.writeFileSync(path.join(root, f), s)
 
-const current = JSON.parse(read('src-tauri/tauri.conf.json')).version
+const current = JSON.parse(read('package.json')).version
 const version =
   process.argv[2] ||
   current
@@ -38,14 +38,29 @@ async function gh(url, init = {}) {
 async function main() {
   console.log(`Releasing ${current} -> ${version}`)
   write('package.json', read('package.json').replace(/"version": "[^"]+"/, `"version": "${version}"`))
-  write('src-tauri/tauri.conf.json', read('src-tauri/tauri.conf.json').replace(/"version": "[^"]+"/, `"version": "${version}"`))
-  write('src-tauri/Cargo.toml', read('src-tauri/Cargo.toml').replace(/^version = "[^"]+"/m, `version = "${version}"`))
+  write('src-zig/build.zig.zon', read('src-zig/build.zig.zon').replace(/\.version = "[^"]+"/, `.version = "${version}"`))
+  write('src-zig/build.zig', read('src-zig/build.zig').replace(/"app version"\) orelse "[^"]+"/, `"app version") orelse "${version}"`))
 
   run('npm run build')
 
-  // the build folder can be moved (CARGO_TARGET_DIR, or target-dir in a .cargo/config.toml): ask cargo where it is
-  const targetDir = JSON.parse(execSync('cargo metadata --format-version 1 --no-deps', { cwd: path.join(root, 'src-tauri'), encoding: 'utf8', maxBuffer: 64 << 20 })).target_directory
-  const exe = path.join(targetDir, 'release/bundle/nsis', `VIBE CODE_${version}_x64-setup.exe`)
+  // the installer: NSIS and its nsis_tauri_utils plugin, as the Tauri CLI downloaded them
+  const nsis = path.join(process.env.LOCALAPPDATA, 'tauri', 'NSIS')
+  if (!fs.existsSync(path.join(nsis, 'makensis.exe'))) throw new Error(`NSIS not found: ${nsis}`)
+  const bin = path.join(root, 'src-zig/zig-out/bin')
+  const size = ['vibe-code.exe', 'WebView2Loader.dll'].reduce((n, f) => n + fs.statSync(path.join(bin, f)).size, 0)
+  const exe = path.join(root, 'src-zig/zig-out', `VIBE CODE_${version}_x64-setup.exe`)
+  execSync(
+    [
+      `"${path.join(nsis, 'makensis.exe')}" -V2 -INPUTCHARSET UTF8`,
+      `"-DVERSION=${version}"`,
+      `"-DBINDIR=${bin}"`,
+      `"-DOUTFILE=${exe}"`,
+      `"-DADDITIONALPLUGINSPATH=${path.join(nsis, 'Plugins/x86-unicode/additional')}"`,
+      `-DESTIMATEDSIZE=${Math.ceil(size / 1024)}`,
+      'installer.nsi'
+    ].join(' '),
+    { cwd: path.join(root, 'src-zig/installer'), stdio: 'inherit' }
+  )
   if (!fs.existsSync(exe)) throw new Error(`installer not found: ${exe}`)
 
   // release notes the app's update popup shows: the commits since the previous release
@@ -53,7 +68,7 @@ async function main() {
   const prev = git('git log -1 --format=%H --grep="^Release v"')
   const notes = git(`git log --no-merges --format="- %s" ${prev ? `${prev}..HEAD` : '-20'}`)
 
-  run(`git commit -m "Release v${version}" -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock`)
+  run(`git commit -m "Release v${version}" -- package.json src-zig/build.zig.zon src-zig/build.zig`)
   run('git push')
 
   const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: root, encoding: 'utf8' }).trim()

@@ -5,12 +5,12 @@
   "description": "A desktop workspace for Claude Code: multi-chat, editor, diffs, terminal.",
   "private": true,
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "node scripts/dev.cjs",
     "dev:web": "vite",
     "build:web": "vite build",
-    "build": "tauri build",
+    "build": "vite build && cd src-zig && zig build -Doptimize=ReleaseFast",
     "typecheck": "tsc -p tsconfig.json",
-    "dist": "tauri build",
+    "dist": "npm run build",
     "release": "node scripts/release.cjs"
   },
   "dependencies": {

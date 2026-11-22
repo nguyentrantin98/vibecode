@@ -69,18 +69,20 @@ Click **Guake** in the title bar (or use the tray icon menu). VIBE CODE then liv
 
 ## Development
 
-Stack: Tauri 2 (Rust backend, system WebView2 / WKWebView) · React · TypeScript · Vite · Monaco · xterm.js (WebGL) · portable-pty (ConPTY)
+Stack: Zig (own Win32 + WebView2 host) · React · TypeScript · Vite · Monaco · xterm.js (WebGL) · ConPTY.
+The macOS build is still the Tauri / Rust one in `src-tauri` until `src-zig` has its macOS host.
 
 ```bash
 npm install
-npm run dev          # tauri dev: Vite with hot reload + the Rust backend
-npm run build        # release build + installer in src-tauri/target/release/bundle/
-npm run release      # bump the patch version, build, commit, push and publish a GitHub release
+npm run dev          # debug build of the app showing the page from Vite, with hot reload
+npm run build        # release build in src-zig/zig-out/bin/
+npm run release      # bump the patch version, build, make the installer, commit, push and publish a GitHub release
 npm run release 0.3.0  # same, with an explicit version
 ```
 
-Building needs Node 24+, Rust (stable, MSVC toolchain on Windows) and, on Windows, the
-Visual Studio C++ Build Tools. The app itself has no Node runtime.
+Building needs Node 24+ and Zig 0.17.1. The installer is made with the NSIS the Tauri CLI
+downloads to `%LOCALAPPDATA%\tauri\NSIS` (`src-zig/installer/installer.nsi` is Tauri's template, so
+updates install over a Tauri-built copy). The app itself has no Node runtime.
 
 `npm run release` uploads the installer as `vibe-code_x64-setup.exe` on a `vX.Y.Z` release. The
 download link above and the in-app Update button both use the latest release. It needs a GitHub token:
@@ -90,11 +92,12 @@ download link above and the in-app Update button both use the latest release. It
 
 ## Layout
 
-- `src-tauri/src`: Rust backend. Terminals (`pty.rs`), files and the file watcher, git, Claude's session
-  store, SQL Server (`mssql.rs`), Zalo (`zalo/`), the built-in browser (`browser.rs`, native
-  WebView2 tabs that sleep when hidden), the MCP server Claude's tools talk to (`mcp.rs`), window /
-  tray / drop-down mode (`windowing.rs`), screen capture (`capture.rs` + `capture.html`), updates
-  (`appcmds.rs`)
-- `src/renderer/src/api.ts`: `window.api`, the page's bridge to the Rust commands and events
+- `src-zig/src`: the native side (see `src-zig/PORTING.md`). Terminals (`pty.zig`), files and the file
+  watcher, git, Claude's session store, SQL Server (`mssql.zig`), Zalo (`zalo/`), the built-in
+  browser (`browser.zig`, native WebView2 tabs that sleep when hidden), the MCP server Claude's tools
+  talk to (`mcp.zig`), window / tray / drop-down mode (`windowing.zig`), screen capture
+  (`capture.zig` + `capture.html`), updates (`appcmds.zig`), the window host (`host/`)
+- `src-tauri/src`: the Rust backend it was ported from (still builds the macOS app)
+- `src/renderer/src/api.ts`: `window.api`, the page's bridge to the native commands and events
 - `src/renderer/src`: UI (`components/`), state (`store.ts`, `actions.ts`), terminals, Monaco setup
 - `scripts/release.cjs`: build and publish a release
