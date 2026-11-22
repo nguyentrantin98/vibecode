@@ -53,13 +53,20 @@ fn options_page(dir: &Path) -> Option<String> {
 /// The extension's folder on disk: the ad blocker's, or one added here.
 fn folder_of(id: &str, builtin: bool) -> Option<PathBuf> {
     if builtin {
+        // the ad blocker (adblock module) only exists on Windows
+        #[cfg(windows)]
         return crate::adblock::installed().map(|(_, d)| d);
+        #[cfg(not(windows))]
+        return None;
     }
     index().remove(id)
 }
 
 pub fn info(id: String, name: String, enabled: bool) -> ExtInfo {
+    #[cfg(windows)]
     let builtin = name.starts_with(crate::adblock::NAME);
+    #[cfg(not(windows))]
+    let builtin = false;
     let options = folder_of(&id, builtin).and_then(|d| options_page(&d)).map(|p| format!("chrome-extension://{id}/{p}"));
     ExtInfo { id, name, enabled, builtin, options }
 }
