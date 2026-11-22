@@ -1,4 +1,4 @@
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { invoke } from '../native'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { SlidePill } from './motion'
 import {
@@ -52,7 +52,7 @@ function dragWindow(e: React.MouseEvent): void {
   if (e.button !== 0 || (e.target as HTMLElement).closest(NO_DRAG)) return
   if (useStore.getState().win?.mode === 'dropdown') return
   if (e.detail === 2) window.api.win.toggleMaximize()
-  else void getCurrentWindow().startDragging()
+  else void invoke('win_start_drag')
 }
 
 export function TitleBar(): React.JSX.Element {

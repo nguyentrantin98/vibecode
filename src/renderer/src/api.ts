@@ -1,13 +1,11 @@
 /**
- * `window.api`: the renderer's only door to the Rust backend (src-tauri).
+ * `window.api`: the renderer's only door to the native side (src-zig).
  *
- * Same shape the UI always used; every call is a Tauri command (`invoke`), every `on…` a Tauri
+ * Same shape the UI always used; every call is a native command (`invoke`), every `on…` a native
  * event whose payload is the argument list. Terminal output is the hot path, so it streams
  * through one `Channel` per terminal instead of the global event bus.
  */
-import { Channel, invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { Channel, invoke, listen, type UnlistenFn } from './native'
 import type {
   AgentInfo,
   AppSettings,
@@ -91,12 +89,8 @@ const platform: 'win32' | 'darwin' | 'linux' = navigator.userAgent.includes('Win
 
 export const api = {
   platform,
-  /**
-   * OK / Cancel question in a native box; true = OK. Use this, not window.confirm: tauri-plugin-dialog
-   * swaps that for an async stand-in whose Promise is always truthy.
-   */
-  ask: async (message: string): Promise<boolean> =>
-    (await invoke<string>('plugin:dialog|message', { message, title: 'VIBE CODE', buttons: 'OkCancel' })) === 'Ok',
+  /** OK / Cancel question in a native box; true = OK. Use this, not window.confirm. */
+  ask: (message: string): Promise<boolean> => invoke<boolean>('dialog_ask', { message, title: 'VIBE CODE' }),
   pty: {
     spawn: (o: PtySpawnOptions): Promise<void> => {
       const ch = new Channel<PtyMsg>()
@@ -332,15 +326,14 @@ export const api = {
       let off: UnlistenFn | null = null
       let dead = false
       let last: string[] = []
-      void getCurrentWebview()
-        .onDragDropEvent(({ payload: p }) => {
-          const ratio = window.devicePixelRatio || 1
-          const pos = 'position' in p ? { x: p.position.x / ratio, y: p.position.y / ratio } : { x: -1, y: -1 }
-          if (p.type === 'enter') last = p.paths
-          const paths = p.type === 'drop' ? p.paths : last
-          cb({ kind: p.type, paths, ...pos })
-        })
-        .then((u) => (dead ? u() : (off = u)))
+      type Drop = { type: DropEvent['kind']; paths?: string[]; position?: { x: number; y: number } }
+      void listen<Drop>('__drop', ({ payload: p }) => {
+        const ratio = window.devicePixelRatio || 1
+        const pos = p.position ? { x: p.position.x / ratio, y: p.position.y / ratio } : { x: -1, y: -1 }
+        if (p.type === 'enter') last = p.paths ?? []
+        const paths = p.type === 'drop' ? (p.paths ?? []) : last
+        cb({ kind: p.type, paths, ...pos })
+      }).then((u) => (dead ? u() : (off = u)))
       return () => {
         dead = true
         off?.()

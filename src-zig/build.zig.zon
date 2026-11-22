@@ -1,0 +1,18 @@
+.{
+    .name = .vibe_code,
+    .version = "0.2.28",
+    .fingerprint = 0x21661da9d2c85c0,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .sqlite = .{
+            .url = "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+            .hash = "N-V-__8AAETTsABEodUZZFAyfdAm9hEyqBXuLw9pRSO0vFh9",
+        },
+        .zig_objc = .{
+            .url = "git+https://github.com/mitchellh/zig-objc#bee663fdfaa0c554235dc36b1dce88d136a190ec",
+            .lazy = true,
+            .hash = "zig_objc-0.0.0-Ir_Sp_4tAQDXtPi51nW_jD9LOEzBvU9lofwO9Pzi6IB4",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "vendor", "icons", "app.rc", "app.manifest" },
+}

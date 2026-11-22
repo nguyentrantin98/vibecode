@@ -1,0 +1,22 @@
+/* Win32 + WebView2 as C: CINTERFACE gives the COM interfaces as plain vtable structs. */
+#define CINTERFACE
+#define COBJMACROS
+#define WIN32_LEAN_AND_MEAN
+#define UNICODE
+#define _UNICODE
+#include <windows.h>
+#include <windowsx.h>
+#include <objidl.h>
+#include <shlwapi.h>
+#include <shellapi.h>
+#include <shlobj.h>
+#include <dwmapi.h>
+#include <shellscalingapi.h>
+#include "WebView2.h"
+#include <shobjidl.h>
+#include <wincrypt.h>
+#include <dpapi.h>
+#include <psapi.h>
+#include <tlhelp32.h>
+#include <wincodec.h>
+#include <uiautomation.h>
