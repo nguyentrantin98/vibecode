@@ -36,6 +36,8 @@ import { languageOf } from '../fileModelsLite'
 import { FileIcon, Logo } from './icons'
 import type { UsageLimit } from '../../../shared/types'
 import { revealIn } from '../scroll'
+import { TempMeter } from './Thermal'
+import { SoundMeter } from './Sound'
 import { giveFiles } from '../terminals'
 import { COMMANDS, type Command } from '../shortcuts'
 import { setLang, useT, type T } from '../i18n'
@@ -390,6 +392,8 @@ function UsageMeters(): React.JSX.Element | null {
         </div>
       ))}
       <RamMeter />
+      <TempMeter />
+      <SoundMeter />
     </div>
   )
 }

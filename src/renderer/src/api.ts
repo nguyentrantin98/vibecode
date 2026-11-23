@@ -36,6 +36,9 @@ import type {
   PtySpawnOptions,
   RecentFile,
   UsageLimit,
+  ThermalInfo,
+  SoundInfo,
+  FanProfile,
   WebData,
   WebSuggestion,
   WindowMode,
@@ -113,6 +116,15 @@ export const api = {
     agents: (): Promise<AgentInfo[]> => invoke('agents_detect'),
     usage: (): Promise<UsageLimit[] | null> => invoke('claude_usage'),
     memory: (): Promise<{ usedBytes: number; totalBytes: number } | null> => invoke('sys_memory'),
+    thermal: (): Promise<ThermalInfo | null> => invoke('sys_thermal'),
+    /** power-plan cooling: fans first, CPU turbo off (no admin) */
+    setCooling: (o: { activeCooling?: boolean; turboOff?: boolean }): Promise<ThermalInfo | null> => invoke('sys_set_cooling', o),
+    /** ASUS firmware fan profile; Windows asks for admin */
+    setFanProfile: (profile: FanProfile): Promise<ThermalInfo | null> => invoke('sys_set_fan_profile', { profile }),
+    /** whole-machine equalizer (Equalizer APO) */
+    sound: (): Promise<SoundInfo> => invoke('sound_status'),
+    setSound: (o: { enabled: boolean; preset: string; bands: number[] }): Promise<SoundInfo> => invoke('sound_set', o),
+    soundConfigurator: (): Promise<void> => invoke('sound_open_configurator'),
     getProjectBypass: (folder: string): Promise<boolean> => invoke('claude_get_project_bypass', { folder }),
     setProjectBypass: (folder: string, on: boolean): Promise<boolean> => invoke('claude_set_project_bypass', { folder, on }),
     apiKey: (): Promise<ClaudeApiKey> => invoke('claude_api_key'),

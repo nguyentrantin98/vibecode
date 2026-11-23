@@ -139,6 +139,35 @@ export interface UsageLimit {
   resetsAt: string | null
 }
 
+/** Machine temperature and cooling (src-zig/src/thermal.zig) */
+export type FanProfile = 'silent' | 'standard' | 'performance'
+export interface ThermalInfo {
+  /** hottest ACPI thermal zone, °C; null when the machine reports none */
+  celsius: number | null
+  zones: { name: string; celsius: number }[]
+  /** power plan: raise the fans before slowing the CPU; null = unreadable */
+  activeCooling: boolean | null
+  /** power plan: CPU turbo boost off */
+  turboOff: boolean | null
+  /** ASUS laptop: the firmware fan profile can be set (asks for admin) */
+  asus: boolean
+  /** the fan profile VIBE CODE last set, and the fan speeds read then */
+  fanProfile: FanProfile | null
+  cpuFanRpm: number | null
+  gpuFanRpm: number | null
+}
+
+/** System-wide equalizer through Equalizer APO (src-zig/src/audio.zig) */
+export interface SoundInfo {
+  installed: boolean
+  configDir: string | null
+  enabled: boolean
+  preset: string
+  /** dB per band, in `freqs` order */
+  bands: number[]
+  freqs: number[]
+}
+
 /** The Anthropic API key Claude chats can run on instead of the plan's login */
 export interface ClaudeApiKey {
   /** "sk-ant-…abcd" — never the whole key; null = none saved */

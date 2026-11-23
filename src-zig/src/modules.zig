@@ -43,11 +43,13 @@ pub const capture = if (enabled("capture")) @import("capture.zig") else struct {
 pub const fsx = if (enabled("fsx")) @import("fsx.zig") else struct {};
 pub const fsearch = if (enabled("fsearch")) @import("fsearch.zig") else struct {};
 pub const git = if (enabled("git")) @import("git.zig") else struct {};
+pub const thermal = if (enabled("thermal")) @import("thermal.zig") else struct {};
+pub const audio = if (enabled("audio")) @import("audio.zig") else struct {};
 
 /// in start-up order
 pub const all = .{
     hostcmds, settings, secure,     appcmds,    windowing,  pty,   plugins, mcp,
     browser,  adblock,  extensions, webdata,    sessions,   mssql, desktop, gmail,
     office,   onlyoffice, zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
-    git,
+    git,      thermal, audio,
 };

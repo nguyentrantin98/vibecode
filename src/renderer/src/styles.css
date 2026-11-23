@@ -3874,6 +3874,248 @@ button.sb-item.sb-update:hover {
   color: var(--text-faint);
 }
 
+/* status-bar temperature and its cooling panel (Thermal.tsx) */
+button.usage-meter.temp-meter {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+button.usage-meter.temp-meter:hover {
+  background: var(--w-08);
+}
+.usage-meter.temp-meter.sev-warning svg {
+  color: var(--yellow);
+}
+.usage-meter.temp-meter.sev-critical svg {
+  color: var(--red);
+}
+.usage-meter.temp-meter .usage-bar {
+  width: 50px;
+}
+.menu.temp-pop {
+  position: fixed;
+  top: auto;
+  min-width: 0;
+  max-width: none;
+  z-index: 1000;
+}
+.temp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px 6px;
+}
+.temp-head > svg {
+  color: var(--green);
+}
+.temp-head.sev-warning > svg {
+  color: var(--yellow);
+}
+.temp-head.sev-critical > svg,
+.temp-head.sev-critical .temp-big {
+  color: var(--red);
+}
+.temp-big {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.temp-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.temp-max {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.temp-zones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 9px 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.temp-pop .menu-sep {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.temp-rpm {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.temp-seg {
+  display: flex;
+  gap: 2px;
+  margin: 0 9px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--w-08);
+}
+.temp-seg > button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 4px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.temp-seg > button:hover:not(:disabled) {
+  color: var(--text);
+}
+.temp-seg > button.on {
+  background: var(--accent);
+  color: #fff;
+}
+.temp-note {
+  padding: 4px 9px 2px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.temp-toggle {
+  justify-content: space-between;
+}
+.temp-toggle:disabled {
+  opacity: 0.55;
+}
+.temp-toggle-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.temp-toggle-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.temp-switch {
+  flex: none;
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--w-14);
+  transition: background 0.15s;
+}
+.temp-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.temp-switch.on {
+  background: var(--accent);
+}
+.temp-switch.on::after {
+  transform: translateX(12px);
+}
+.temp-error {
+  margin: 6px 9px 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.usage-meter.temp-meter.sound-on svg {
+  color: var(--accent);
+}
+.sound-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.sound-steps {
+  margin: 2px 9px 8px 26px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.sound-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 9px 6px;
+}
+.sound-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sound-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 9px;
+}
+.sound-presets > button {
+  padding: 4px 9px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: var(--w-08);
+}
+.sound-presets > button:hover {
+  color: var(--text);
+}
+.sound-presets > button.on {
+  background: var(--accent);
+  color: #fff;
+}
+.sound-eq {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 6px;
+}
+.sound-eq.off {
+  opacity: 0.45;
+}
+.sound-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 32px;
+}
+.sound-band input[type='range'] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 18px;
+  height: 104px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.sound-db,
+.sound-freq {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+.sound-db {
+  color: var(--text-2);
+}
+
 /* web tab: emulated screen sizes */
 .browser-stage {
   flex: 1;
