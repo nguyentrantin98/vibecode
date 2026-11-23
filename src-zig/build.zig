@@ -84,6 +84,9 @@ fn assetsModule(b: *std.Build, renderer: []const u8) !*std.Build.Module {
         .optimize = .fast,
     }) });
     const run = b.addRunArtifact(gen);
+    // a directory argument is cached by its path, not its files: without this a rebuilt renderer
+    // was never repacked and the app shipped the pages of an old build
+    run.has_side_effects = true;
     run.addDirectoryArg(b.path(renderer));
     const out = run.addOutputDirectoryArg("assets");
     return b.createModule(.{ .root_source_file = out.path(b, "assets.zig") });
