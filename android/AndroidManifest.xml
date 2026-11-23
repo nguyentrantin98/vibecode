@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VIBE CODE Remote: a WebView shell around the page the computer serves (src-zig/src/remote.zig). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="vn.tinjs.vibecode.remote">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="VIBE CODE Remote"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity
+            android:name=".Main"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

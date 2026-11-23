@@ -29,6 +29,7 @@ Run the installer (no admin rights needed, it installs for the current user). VI
 - **Temperature & sound**: the status bar shows the machine temperature; click it for cooling (fans first, CPU Turbo Boost off, and on ASUS laptops the fan profile and a 100% fan switch). **EQ** next to it is a whole-machine equalizer (presets such as *Less bass*, *Clear voice*, plus 10 bands): VIBE CODE's own audio filter (`src-zig/apo`), added after the speakers' own effects with one admin prompt.
 - **Drop-down (Guake) mode**: a global hotkey slides VIBE CODE over any app.
 - **Attachments**: paste or drop images and files into a chat. They wait in a tray until you send.
+- **Phone remote**: follow and drive your chats from an Android phone on the same Wi-Fi (see below).
 
 ## Shortcuts
 
@@ -66,6 +67,21 @@ F5 / Ctrl+R never reload the app window (that would blank every chat).
 
 Click **Guake** in the title bar (or use the tray icon menu). VIBE CODE then lives at the top edge of the screen under the mouse: the global hotkey slides it down over whatever app you're in and back up again. The tray menu sets height, opacity and "hide when focus is lost". Dragging the bottom edge changes the height. The hotkey is `hotkey` in `%APPDATA%\TINJS Studio\settings.json` (F12 can't be used: Windows reserves it for debuggers).
 
+## Phone remote (Android)
+
+Click the phone icon in the status bar, tick **Phone remote**, then **Pair a phone** and type the PIN on the phone.
+The phone sees every open chat and whether it is working, finished or waiting on you; reads the conversation
+or the live terminal; sends messages; answers Claude's numbered choices with one tap; starts new chats.
+
+- **App**: `npm run build:android` makes `android/build/vibe-code-remote.apk` (~25 KB, Android 7+). It finds
+  the computer by itself (UDP broadcast) and shows the page the computer serves, so it never needs updating.
+- **No app**: any phone browser at `http://<computer IP>:47717` works the same.
+
+Port 47717 (TCP + UDP); allow it when Windows Firewall asks (private networks). Off by default; the PIN is
+valid 5 minutes and dies after 5 wrong tries; each phone gets its own token (only its hash is stored, in
+`remote.json`) and can be removed from the panel. Traffic is plain HTTP on your local network: use it on
+networks you trust, or over Tailscale / a VPN from outside.
+
 ## Development
 
 Stack: Zig (own Win32 + WebView2 host) · React · TypeScript · Vite · Monaco · xterm.js (WebGL) · ConPTY.
@@ -77,6 +93,7 @@ npm run dev          # debug build of the app showing the page from Vite, with h
 npm run build        # release build in src-zig/zig-out/bin/
 npm run release      # bump the patch version, build, make the installer, commit, push and publish a GitHub release
 npm run release 0.3.0  # same, with an explicit version
+npm run build:android  # the phone remote APK (needs an Android SDK platform + build-tools and a JDK; no Gradle)
 ```
 
 Building needs Node 24+ and Zig 0.17.1. The installer is made with NSIS 3 in
@@ -101,3 +118,5 @@ download link above and the in-app Update button both use the latest release. It
 - `src/renderer/src/api.ts`: `window.api`, the page's bridge to the native commands and events
 - `src/renderer/src`: UI (`components/`), state (`store.ts`, `actions.ts`), terminals, Monaco setup
 - `scripts/release.cjs`: build and publish a release
+- `src-zig/src/remote.zig` (server, pairing, discovery) · `src/renderer/src/remote.ts` (what phones see and do) ·
+  `src/renderer/src/phone/` (the phone page) · `android/` (the APK: one Java file, built by `scripts/build-android.cjs`)

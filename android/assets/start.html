@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>VIBE CODE Remote</title>
+    <style>
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; background: #1c1c1e; color: #f5f5f7; font: 15px/1.45 system-ui, Roboto, sans-serif; }
+      main { max-width: 440px; margin: 0 auto; padding: 48px 20px 24px; }
+      .logo { color: #0a84ff; font-weight: 700; letter-spacing: 2px; text-align: center; }
+      h1 { font-size: 20px; text-align: center; margin: 8px 0 24px; }
+      h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #7d7d83; margin: 22px 0 8px; display: flex; align-items: center; gap: 8px; }
+      .pc { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; margin-bottom: 8px; border: 0; border-radius: 12px; background: #2c2c2f; color: inherit; font: inherit; text-align: left; }
+      .pc:active { background: #3a3a3d; }
+      .pc b { display: block; font-weight: 600; }
+      .pc small { color: #a1a1a6; }
+      .pc .x { margin-left: auto; color: #7d7d83; padding: 4px 8px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #32d74b; flex: none; }
+      .dot.off { background: #7d7d83; }
+      .muted { color: #a1a1a6; font-size: 14px; }
+      .row { display: flex; gap: 8px; }
+      input { flex: 1; min-width: 0; padding: 11px 14px; border-radius: 12px; border: 1px solid #38383b; background: #2c2c2f; color: #f5f5f7; font: inherit; outline: none; }
+      input:focus { border-color: #0a84ff; }
+      button.go { padding: 0 16px; border: 0; border-radius: 12px; background: #0a84ff; color: #fff; font: 600 15px system-ui, sans-serif; }
+      .link { border: 0; background: none; color: #0a84ff; font: inherit; padding: 0; margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 13px; }
+      .err { background: #ff453a22; color: #ff6961; border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+      .spin { width: 11px; height: 11px; border: 2px solid #0a84ff; border-right-color: transparent; border-radius: 50%; animation: r 0.8s linear infinite; }
+      @keyframes r { to { transform: rotate(360deg); } }
+      .help { margin-top: 28px; color: #7d7d83; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="logo">VIBE CODE</div>
+      <h1 id="title"></h1>
+      <div id="error"></div>
+      <div id="savedBox"><h2 id="savedTitle"></h2><div id="saved"></div></div>
+      <h2><span id="foundTitle"></span><span id="spin" class="spin"></span><button id="rescan" class="link"></button></h2>
+      <div id="found"></div>
+      <h2 id="manualTitle"></h2>
+      <div class="row">
+        <input id="ip" inputmode="decimal" placeholder="192.168.1.10" autocomplete="off" />
+        <button id="go" class="go"></button>
+      </div>
+      <p class="help" id="help"></p>
+    </main>
+    <script>
+      const vi = navigator.language.toLowerCase().startsWith('vi')
+      const t = (en, v) => (vi ? v : en)
+      const PORT = 47717
+      const $ = (id) => document.getElementById(id)
+      const KEY = 'vibe.hosts'
+      const hosts = () => JSON.parse(localStorage.getItem(KEY) || '[]')
+
+      $('title').textContent = t('Connect to your computer', 'Kết nối tới máy tính')
+      $('savedTitle').textContent = t('Recent', 'Gần đây')
+      $('foundTitle').textContent = t('On this Wi-Fi', 'Trong mạng Wi-Fi này')
+      $('rescan').textContent = t('Search again', 'Tìm lại')
+      $('manualTitle').textContent = t('Or type its address', 'Hoặc nhập địa chỉ')
+      $('go').textContent = t('Connect', 'Kết nối')
+      $('help').textContent = t(
+        'On the computer, turn on the phone remote: click the phone icon in VIBE CODE’s status bar. The phone and the computer must be on the same network (or the same Tailscale / VPN).',
+        'Trên máy tính, bật điều khiển từ điện thoại: bấm biểu tượng điện thoại ở thanh trạng thái của VIBE CODE. Điện thoại và máy tính phải cùng mạng (hoặc cùng Tailscale / VPN).'
+      )
+
+      function open(ip, name) {
+        const list = hosts().filter((h) => h.ip !== ip)
+        list.unshift({ ip, name: name || ip })
+        localStorage.setItem(KEY, JSON.stringify(list.slice(0, 6)))
+        location.href = `http://${ip}:${PORT}/`
+      }
+
+      function card(h, online, removable) {
+        const b = document.createElement('button')
+        b.className = 'pc'
+        b.innerHTML = `<span class="dot${online ? '' : ' off'}"></span><span><b></b><small></small></span>`
+        b.querySelector('b').textContent = h.name || h.ip
+        b.querySelector('small').textContent = h.ip
+        b.onclick = () => open(h.ip, h.name)
+        if (removable) {
+          const x = document.createElement('span')
+          x.className = 'x'
+          x.textContent = '✕'
+          x.onclick = (e) => {
+            e.stopPropagation()
+            localStorage.setItem(KEY, JSON.stringify(hosts().filter((o) => o.ip !== h.ip)))
+            drawSaved()
+          }
+          b.append(x)
+        }
+        return b
+      }
+
+      const found = new Map()
+      function drawSaved() {
+        const list = hosts()
+        $('savedBox').style.display = list.length ? '' : 'none'
+        $('saved').replaceChildren(...list.map((h) => card(h, found.has(h.ip), true)))
+      }
+      function drawFound() {
+        const list = [...found.values()]
+        $('found').replaceChildren(...(list.length ? list.map((h) => card(h, true, false)) : [Object.assign(document.createElement('div'), { className: 'muted', textContent: $('spin').style.display === 'none' ? t('No computer found.', 'Không tìm thấy máy tính nào.') : t('Searching…', 'Đang tìm…') })]))
+      }
+      window.onFound = (h) => {
+        found.set(h.ip, h)
+        drawFound()
+        drawSaved()
+      }
+      window.onSearchDone = () => {
+        $('spin').style.display = 'none'
+        drawFound()
+      }
+      function search() {
+        $('spin').style.display = ''
+        drawFound()
+        if (window.VibeAndroid) VibeAndroid.discover()
+        else window.onSearchDone()
+      }
+      $('rescan').onclick = search
+      $('go').onclick = () => {
+        const ip = $('ip').value.trim().replace(/^https?:\/\//, '').replace(/[:/].*$/, '')
+        if (ip) open(ip)
+      }
+      $('ip').onkeydown = (e) => e.key === 'Enter' && $('go').onclick()
+
+      const hash = location.hash.slice(1)
+      if (hash.startsWith('error=')) {
+        const host = decodeURIComponent(hash.slice(6))
+        $('error').innerHTML = '<p class="err"></p>'
+        $('error').firstChild.textContent = t(`Could not reach ${host}. Is VIBE CODE running there, with the phone remote on?`, `Không kết nối được ${host}. VIBE CODE trên máy đó đã chạy và bật điều khiển từ điện thoại chưa?`)
+      }
+      // opened from the launcher: straight back to the last computer
+      const last = hosts()[0]
+      history.replaceState(null, '', location.pathname)
+      if (hash === 'auto' && last) open(last.ip, last.name)
+      else {
+        drawSaved()
+        search()
+      }
+    </script>
+  </body>
+</html>

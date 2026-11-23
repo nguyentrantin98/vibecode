@@ -40,6 +40,7 @@ import { TempMeter } from './Thermal'
 import { SoundMeter } from './Sound'
 import { giveFiles } from '../terminals'
 import { COMMANDS, type Command } from '../shortcuts'
+import { RemoteButton } from './RemotePanel'
 import { setLang, useT, type T } from '../i18n'
 
 /* ================================ Title bar ================================ */
@@ -461,6 +462,7 @@ export function StatusBar(): React.JSX.Element {
       <div className="statusbar-right">
         {tab && <span className="sb-item">{languageOf(tab.path)}</span>}
         {tab && <span className="sb-item">UTF-8</span>}
+        <RemoteButton />
         {claude && <AgentPicker />}
       </div>
     </div>

@@ -514,3 +514,19 @@ export interface ExPlace {
   total: number
   free: number
 }
+
+/** Phone remote (src-zig/src/remote.zig): the Android app pairs with a PIN and drives the chats over the local network */
+export interface RemoteState {
+  enabled: boolean
+  listening: boolean
+  /** why the server could not start */
+  problem: string | null
+  port: number
+  host: string
+  /** this computer's IPv4 addresses */
+  addresses: string[]
+  /** shown while a phone can pair with it */
+  pin: string | null
+  pinUntil: number
+  devices: { id: string; name: string; at: number; online: boolean }[]
+}

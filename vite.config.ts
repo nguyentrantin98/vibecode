@@ -17,6 +17,8 @@ export default defineConfig({
     emptyOutDir: true,
     // WebView2 is evergreen Chromium; the macOS build runs on WebKit (Safari 16+)
     target: ['chrome120', 'safari16'],
-    chunkSizeWarningLimit: 4096
+    chunkSizeWarningLimit: 4096,
+    // the app, and the phone remote's page (served to phones by src-zig/src/remote.zig)
+    rollupOptions: { input: { index: resolve('src/renderer/index.html'), remote: resolve('src/renderer/remote.html') } }
   }
 })

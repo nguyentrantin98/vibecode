@@ -909,3 +909,14 @@ export function readScreen(id: string): string {
   for (let i = 0; i < e.term.rows; i++) lines.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? '')
   return lines.join('\n').replace(/\n+$/, '')
 }
+
+/** The screen as the program last drew it (the bottom of the buffer, wherever the view is scrolled): the phone remote's terminal view. */
+export function screenLines(id: string): string[] {
+  const e = entries.get(id)
+  if (!e) return []
+  const b = e.term.buffer.active
+  const lines: string[] = []
+  for (let i = 0; i < e.term.rows; i++) lines.push(b.getLine(b.baseY + i)?.translateToString(true) ?? '')
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop()
+  return lines
+}

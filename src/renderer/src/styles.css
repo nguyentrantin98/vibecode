@@ -6161,3 +6161,68 @@ html:lang(vi) .xterm-host.drop-hover::after { content: 'Thả vào để đính 
   padding: 0 10px;
   font-size: 11px;
 }
+
+/* ---- phone remote (status bar) ---- */
+.remote-panel {
+  width: 300px;
+  padding: 8px 10px 10px;
+  cursor: default;
+}
+.remote-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.remote-title {
+  font-weight: 600;
+}
+.remote-sub {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.remote-bad {
+  color: var(--red);
+}
+.remote-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  margin-top: 4px;
+  user-select: text;
+}
+.remote-pair {
+  margin-top: 10px;
+  width: 100%;
+  justify-content: center;
+}
+.remote-pin {
+  margin-top: 10px;
+  text-align: center;
+}
+.remote-pin-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 6px;
+  user-select: text;
+}
+.remote-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.remote-device .menu-item-main {
+  flex: 1;
+}
+.remote-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.remote-dot.on {
+  background: var(--green);
+}

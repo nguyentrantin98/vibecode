@@ -32,6 +32,7 @@ import type {
   MailBody,
   MailSummary,
   ProjectGroup,
+  RemoteState,
   OfficeRequest,
   PtySpawnOptions,
   RecentFile,
@@ -199,6 +200,19 @@ export const api = {
     columns: (id: string, database: string, schema: string, table: string): Promise<DbColumn[]> => invoke('db_columns', { id, database, schema, table }),
     scanProject: (folder: string): Promise<DbFound[]> => invoke('db_scan_project', { folder }),
     scanSsms: (): Promise<DbFound[]> => invoke('db_scan_ssms')
+  },
+  remote: {
+    state: (): Promise<RemoteState> => invoke('remote_state'),
+    enable: (on: boolean): Promise<RemoteState> => invoke('remote_enable', { on }),
+    /** a fresh PIN a phone can pair with for a few minutes */
+    pin: (): Promise<RemoteState> => invoke('remote_pin'),
+    revoke: (id: string): Promise<RemoteState> => invoke('remote_revoke', { id }),
+    /** a message to one phone (`to`), or to all of them */
+    push: (msg: unknown, to?: number): void => void invoke('remote_push', { to, msg: JSON.stringify(msg) }),
+    /** a message from a phone (`{t:'bye'}` when it disconnects) */
+    onCmd: (cb: (client: number, msg: Record<string, unknown>) => void): Off => on('remote:cmd', cb),
+    /** a phone paired, connected or left */
+    onChanged: (cb: () => void): Off => on('remote:changed', cb)
   },
   desktop: {
     /** lets this chat's Claude drive other Windows apps from its next (re)start */

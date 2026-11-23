@@ -11,7 +11,8 @@
     "build": "vite build && cd src-zig && zig build -Doptimize=ReleaseFast",
     "typecheck": "tsc -p tsconfig.json",
     "dist": "npm run build",
-    "release": "node scripts/release.cjs"
+    "release": "node scripts/release.cjs",
+    "build:android": "node scripts/build-android.cjs"
   },
   "devDependencies": {
     "@babel/core": "8.1.2",

@@ -45,11 +45,12 @@ pub const fsearch = if (enabled("fsearch")) @import("fsearch.zig") else struct {
 pub const git = if (enabled("git")) @import("git.zig") else struct {};
 pub const thermal = if (enabled("thermal")) @import("thermal.zig") else struct {};
 pub const audio = if (enabled("audio")) @import("audio.zig") else struct {};
+pub const remote = if (enabled("remote")) @import("remote.zig") else struct {};
 
 /// in start-up order
 pub const all = .{
     hostcmds, settings, secure,     appcmds,    windowing,  pty,   plugins, mcp,
     browser,  adblock,  extensions, webdata,    sessions,   mssql, desktop, gmail,
     office,   onlyoffice, zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
-    git,      thermal, audio,
+    git,      thermal, audio, remote,
 };
