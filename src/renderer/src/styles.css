@@ -5904,3 +5904,15 @@ html:lang(vi) .xterm-host.drop-hover::after { content: 'Thả vào để đính 
 .ext-folder:disabled {
   opacity: 0.5;
 }
+
+/* Terminal tab: Claude Code's own screen or the same conversation as a chat */
+.code-side-switch.term-views {
+  padding: 4px 8px;
+  background: var(--bg-1);
+}
+.code-side-switch.term-views button {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 11px;
+}

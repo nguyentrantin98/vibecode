@@ -23,7 +23,7 @@ import {
   toggleDesktop,
   setClaudeApiKey
 } from '../actions'
-import { attachTerm, detachTerm, fitTerm, focusTerm, writeToTerm } from '../terminals'
+import { attachTerm, detachTerm, fitTerm, focusTerm, menuShown, writeToTerm } from '../terminals'
 import { Logo, StatusDot, statusText } from './icons'
 import { ChatImages, useChatImages } from './ChatImages'
 import { ChatTasks, useChatTasks } from './ChatTasks'
@@ -126,9 +126,9 @@ export function ClaudePanel(): React.JSX.Element {
   const runningTasks = tasks.filter((t) => t.status === 'running').length
   const files = useChatFiles(active?.sessionId)
   const changedFiles = files.filter((f) => f.action !== 'read').length
-  const [tab, setTab] = useState<'chat' | 'terminal' | 'images' | 'files' | 'tasks'>('chat')
+  const [tab, setTab] = useState<'chat' | 'terminal' | 'images' | 'files' | 'tasks'>('terminal')
   // Chat (drawn from Claude's transcript) or Terminal: the last one you picked; other agents only have the terminal
-  const [lastView, setLastView] = useState<'chat' | 'terminal'>('chat')
+  const [lastView, setLastView] = useState<'chat' | 'terminal'>('terminal')
   const hasChatView = !!active && agentDef(active.agent).id === 'claude'
   const view = hasChatView ? lastView : 'terminal'
   // another chat opens on that view
@@ -148,6 +148,20 @@ export function ClaudePanel(): React.JSX.Element {
     setTab('terminal')
     setTimeout(() => active && focusTerm(active.id), 0)
   }
+  // Claude waits on a numbered choice (permission prompt, plan approval…): only its terminal can answer, so show it
+  useEffect(() => {
+    if (!activeId) return
+    let shown = menuShown(activeId)
+    const i = setInterval(() => {
+      const now = menuShown(activeId)
+      if (now && !shown) {
+        setTab('terminal')
+        focusTerm(activeId)
+      }
+      shown = now
+    }, 700)
+    return () => clearInterval(i)
+  }, [activeId])
   // a quick action: back to the conversation, keyboard in the terminal only when it shows
   const backToView = (): void => {
     setTab(view)
@@ -210,12 +224,11 @@ export function ClaudePanel(): React.JSX.Element {
           </div>
           <div className="code-side-switch chat-tabs">
             <SlidePill />
-            {hasChatView && (
-              <button className={tab === 'chat' ? 'on' : ''} title={t('The conversation, with tool calls folded up', 'Cuộc trò chuyện, với các lệnh gọi tool được thu gọn')} onClick={() => leaveTerminal('chat')}>
-                <MessageSquare size={13} /> Chat
-              </button>
-            )}
-            <button className={tab === 'terminal' ? 'on' : ''} title={t("Claude Code's own screen", 'Màn hình gốc của Claude Code')} onClick={showTerminal}>
+            <button
+              className={tab === 'terminal' || tab === 'chat' ? 'on' : ''}
+              title={t("The conversation: Claude Code's own screen or a chat", 'Cuộc trò chuyện: màn hình gốc của Claude Code hoặc dạng chat')}
+              onClick={() => (view === 'terminal' ? showTerminal() : leaveTerminal('chat'))}
+            >
               <SquareTerminal size={13} /> Terminal
             </button>
             <button className={tab === 'images' ? 'on' : ''} onClick={() => leaveTerminal('images')}>
@@ -231,6 +244,17 @@ export function ClaudePanel(): React.JSX.Element {
               {runningTasks > 0 ? <span className="center-count running">{runningTasks}</span> : tasks.length > 0 && <span className="center-count">{tasks.length}</span>}
             </button>
           </div>
+          {hasChatView && (tab === 'terminal' || tab === 'chat') && (
+            <div className="code-side-switch term-views">
+              <SlidePill />
+              <button className={tab === 'terminal' ? 'on' : ''} title={t("Claude Code's own screen", 'Màn hình gốc của Claude Code')} onClick={showTerminal}>
+                <SquareTerminal size={12} /> {t('Terminal view', 'Dạng terminal')}
+              </button>
+              <button className={tab === 'chat' ? 'on' : ''} title={t('The conversation, with tool calls folded up', 'Cuộc trò chuyện, với các lệnh gọi tool được thu gọn')} onClick={() => leaveTerminal('chat')}>
+                <MessageSquare size={12} /> {t('Chat view', 'Dạng chat')}
+              </button>
+            </div>
+          )}
           {/*
             The terminal stays mounted and laid out (only made invisible): display:none would reset
             xterm's scroll position to the top of the buffer and replay the enter animation on return.
