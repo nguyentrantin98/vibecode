@@ -20,3 +20,5 @@
 #include <tlhelp32.h>
 #include <wincodec.h>
 #include <uiautomation.h>
+#include <pdh.h>
+#include <powrprof.h>

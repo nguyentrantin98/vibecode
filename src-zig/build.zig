@@ -44,7 +44,7 @@ pub fn build(b: *std.Build) !void {
         tc.addIncludePath(b.path("vendor/webview2"));
         mod.addImport("win", tc.createModule());
         mod.addWin32ResourceFile(.{ .file = b.path("app.rc") });
-        for ([_][]const u8{ "ole32", "oleaut32", "user32", "gdi32", "shell32", "shlwapi", "advapi32", "dwmapi", "uxtheme", "comctl32", "shcore", "crypt32", "ws2_32", "bcrypt", "version", "uiautomationcore", "windowscodecs", "winmm" }) |lib|
+        for ([_][]const u8{ "ole32", "oleaut32", "user32", "gdi32", "shell32", "shlwapi", "advapi32", "dwmapi", "uxtheme", "comctl32", "shcore", "crypt32", "ws2_32", "bcrypt", "version", "uiautomationcore", "windowscodecs", "winmm", "pdh", "powrprof" }) |lib|
             mod.linkSystemLibrary(lib, .{});
     } else if (os == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |objc|
