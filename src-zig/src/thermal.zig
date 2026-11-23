@@ -35,6 +35,8 @@ const Thermal = struct {
     asus: bool,
     /// the profile this app last set, and the fan speeds read then
     fanProfile: ?[]const u8,
+    /// the CPU fan was last set to full speed by this app
+    fanFull: bool,
     cpuFanRpm: ?u32,
     gpuFanRpm: ?u32,
 };
@@ -53,6 +55,7 @@ fn sys_thermal(c: *ipc.Call) !?Thermal {
         .turboOff = if (readPlan(PERFBOOSTMODE)) |v| v == 0 else null,
         .asus = isAsus(),
         .fanProfile = st.fanProfile,
+        .fanFull = st.fanFull,
         .cpuFanRpm = st.cpuFanRpm,
         .gpuFanRpm = st.gpuFanRpm,
     };
@@ -207,6 +210,7 @@ fn isAsus() bool {
 
 const FanState = struct {
     fanProfile: ?[]const u8 = null,
+    fanFull: bool = false,
     cpuFanRpm: ?u32 = null,
     gpuFanRpm: ?u32 = null,
 };
@@ -234,7 +238,7 @@ var fan_counter: std.atomic.Value(u32) = .init(0);
 fn sys_set_fan_profile(c: *ipc.Call, a: struct { profile: []const u8 }) !?Thermal {
     if (!core.is_windows) return error.Unsupported;
     const ar = c.arena;
-    const valid = [_][]const u8{ "silent", "standard", "performance" };
+    const valid = [_][]const u8{ "silent", "standard", "performance", "full", "auto" };
     for (valid) |v| {
         if (std.mem.eql(u8, v, a.profile)) break;
     } else return c.fail("unknown fan profile {s}", .{a.profile});
@@ -265,7 +269,14 @@ fn sys_set_fan_profile(c: *ipc.Call, a: struct { profile: []const u8 }) !?Therma
     const r = core.fromJson(ScriptResult, ar, body) catch return c.failMsg(tr("The fan change gave no answer", "Không nhận được kết quả đổi quạt"));
     if (!r.ok) return c.failMsg(r.@"error" orelse tr("Could not change the fan profile", "Không đổi được chế độ quạt"));
 
-    const st: FanState = .{ .fanProfile = r.profile orelse a.profile, .cpuFanRpm = r.cpuFanRpm, .gpuFanRpm = r.gpuFanRpm };
+    const prev = loadState(ar);
+    const speed = std.mem.eql(u8, a.profile, "full") or std.mem.eql(u8, a.profile, "auto");
+    const st: FanState = .{
+        .fanProfile = r.profile orelse if (speed) prev.fanProfile else a.profile,
+        .fanFull = if (speed) std.mem.eql(u8, a.profile, "full") else prev.fanFull,
+        .cpuFanRpm = r.cpuFanRpm,
+        .gpuFanRpm = r.gpuFanRpm,
+    };
     core.writeAtomic(try statePath(ar), try core.toJson(ar, st)) catch {};
     return sys_thermal(c);
 }

@@ -105,7 +105,7 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
   const maxCooling = (): Promise<void> =>
     run('max', async () => {
       let next = await window.api.claude.setCooling({ activeCooling: true, turboOff: true })
-      if (info.asus) next = await window.api.claude.setFanProfile('performance')
+      if (info.asus) next = await window.api.claude.setFanProfile('full')
       return next
     })
 
@@ -113,7 +113,7 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
   const profiles: { id: FanProfile; label: string }[] = [
     { id: 'silent', label: t('Quiet', 'Êm') },
     { id: 'standard', label: t('Standard', 'Tiêu chuẩn') },
-    { id: 'performance', label: t('Max fan', 'Quạt mạnh') }
+    { id: 'performance', label: t('Performance', 'Hiệu năng') }
   ]
   const spin = (key: string): React.JSX.Element | null => (busy === key ? <Loader2 size={12} className="spin" /> : null)
 
@@ -125,7 +125,7 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
           <div className="temp-big">{c}°C</div>
           <div className="temp-sub">{verdict(c, t)}</div>
         </div>
-        <button className="btn btn-primary temp-max" disabled={busy !== null} onClick={() => void maxCooling()} title={t('Turbo off, fans first' + (info.asus ? ', ASUS fan at full' : ''), 'Tắt Turbo, ưu tiên quạt' + (info.asus ? ', quạt ASUS mạnh nhất' : ''))}>
+        <button className="btn btn-primary temp-max" disabled={busy !== null} onClick={() => void maxCooling()} title={t('Turbo off, fans first' + (info.asus ? ', fan at 100%' : ''), 'Tắt Turbo, ưu tiên quạt' + (info.asus ? ', quạt 100%' : ''))}>
           {spin('max') ?? <Snowflake size={13} />}
           {t('Max cooling', 'Làm mát tối đa')}
         </button>
@@ -154,6 +154,14 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
               </button>
             ))}
           </div>
+          <Toggle
+            on={info.fanFull}
+            disabled={busy !== null}
+            busy={busy === 'fan-full' || busy === 'fan-auto'}
+            label={t('Fan at 100%', 'Quạt tối đa 100%')}
+            sub={t('Full speed until turned off (loud)', 'Quay hết tốc độ cho tới khi tắt (khá ồn)')}
+            onChange={(v) => void run(v ? 'fan-full' : 'fan-auto', () => window.api.claude.setFanProfile(v ? 'full' : 'auto'))}
+          />
           <div className="temp-note">{t('Windows asks for admin permission each change.', 'Mỗi lần đổi, Windows sẽ hỏi quyền quản trị.')}</div>
         </>
       )}

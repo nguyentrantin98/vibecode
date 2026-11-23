@@ -119,8 +119,8 @@ export const api = {
     thermal: (): Promise<ThermalInfo | null> => invoke('sys_thermal'),
     /** power-plan cooling: fans first, CPU turbo off (no admin) */
     setCooling: (o: { activeCooling?: boolean; turboOff?: boolean }): Promise<ThermalInfo | null> => invoke('sys_set_cooling', o),
-    /** ASUS firmware fan profile; Windows asks for admin */
-    setFanProfile: (profile: FanProfile): Promise<ThermalInfo | null> => invoke('sys_set_fan_profile', { profile }),
+    /** ASUS firmware fan profile, or 'full' / 'auto' CPU fan speed; Windows asks for admin */
+    setFanProfile: (profile: FanProfile | 'full' | 'auto'): Promise<ThermalInfo | null> => invoke('sys_set_fan_profile', { profile }),
     /** whole-machine equalizer (Equalizer APO) */
     sound: (): Promise<SoundInfo> => invoke('sound_status'),
     setSound: (o: { enabled: boolean; preset: string; bands: number[] }): Promise<SoundInfo> => invoke('sound_set', o),

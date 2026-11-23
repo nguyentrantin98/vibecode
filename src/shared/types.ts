@@ -153,6 +153,8 @@ export interface ThermalInfo {
   asus: boolean
   /** the fan profile VIBE CODE last set, and the fan speeds read then */
   fanProfile: FanProfile | null
+  /** the CPU fan was last set to full speed by VIBE CODE */
+  fanFull: boolean
   cpuFanRpm: number | null
   gpuFanRpm: number | null
 }
