@@ -748,6 +748,8 @@ pub const Webview = struct {
     visible: bool,
     closed: bool = false,
     drop: ?*DropTarget = null,
+    /// the child window WebView2 made for it (for its stacking order)
+    hwnd: c.HWND = null,
     /// what the owner keeps with it
     user: ?*anyopaque = null,
 
@@ -764,7 +766,32 @@ pub const Webview = struct {
         if (v.controller) |ctl| {
             v.fit();
             _ = com.call(ctl, "put_IsVisible", .{@as(c.BOOL, @intFromBool(visible))});
+            if (visible) v.stack();
         }
+    }
+
+    /// All pages of a window are sibling child windows, stacked in creation order: whichever
+    /// WebView2 finished making last ended up on top, so the app's full-window page could cover
+    /// a Web tab (a white pane). The app's page goes to the bottom, a shown inner page on top.
+    fn stack(v: *Webview) void {
+        const h = v.hwnd orelse return;
+        // HWND_TOP (0) / HWND_BOTTOM (1)
+        const where: isize = if (v.bounds == null) 1 else 0;
+        _ = SetWindowPos(h, where, 0, 0, 0, 0, c.SWP_NOMOVE | c.SWP_NOSIZE | c.SWP_NOACTIVATE);
+    }
+
+    /// The window's child that no other page has claimed: the one this controller just made.
+    fn findOwnHwnd(v: *Webview) c.HWND {
+        var h = c.GetWindow(v.window.hwnd, c.GW_CHILD);
+        while (h != null) : (h = c.GetWindow(h, c.GW_HWNDNEXT)) {
+            var taken = false;
+            for (webviews.items) |o| if (o != v and o.window == v.window and o.hwnd == h) {
+                taken = true;
+                break;
+            };
+            if (!taken) return h;
+        }
+        return null;
     }
 
     fn fit(v: *Webview) void {
@@ -926,8 +953,10 @@ fn onController(v: *Webview, hr: c.HRESULT, ctl: [*c]c.ICoreWebView2Controller) 
         v.drop = DropTarget.register(v);
     }
 
+    v.hwnd = v.findOwnHwnd();
     v.fit();
     _ = com.call(ctl, "put_IsVisible", .{@as(c.BOOL, @intFromBool(v.visible))});
+    if (v.bounds == null or v.visible) v.stack();
     if (o.on_ready) |f| f(v, o.ctx);
     if (!v.closed) v.navigate(o.url);
     return com.S_OK;
