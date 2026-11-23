@@ -53,6 +53,30 @@ pub fn build(b: *std.Build) !void {
             mod.linkFramework(fw, .{});
     }
 
+    if (os == .windows) {
+        // the equalizer APO that audiodg.exe loads (src/audio.zig installs it): always optimized
+        // and without safety checks, a panic there would cut the machine's sound
+        const apo = b.addLibrary(.{
+            .name = "vibe-eq-apo",
+            .linkage = .dynamic,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("apo/eq_apo.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+            }),
+        });
+        apo.root_module.linkSystemLibrary("ole32", .{});
+        mod.addAnonymousImport("vibe-eq-apo.dll", .{ .root_source_file = apo.getEmittedBin() });
+        b.step("apo", "build the equalizer APO dll").dependOn(&b.addInstallArtifact(apo, .{}).step);
+        const apo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("apo/dsp.zig"), .target = target, .optimize = optimize }) });
+        b.step("test-apo", "equalizer DSP tests").dependOn(&b.addRunArtifact(apo_tests).step);
+        const harness = b.addExecutable(.{ .name = "apo-harness", .root_module = b.createModule(.{ .root_source_file = b.path("apo/harness.zig"), .target = target, .optimize = .Debug }) });
+        const hrun = b.addRunArtifact(harness);
+        hrun.addFileArg(apo.getEmittedBin());
+        b.step("apo-check", "load the APO dll like the audio engine and run audio through it").dependOn(&hrun.step);
+    }
+
     const exe = b.addExecutable(.{ .name = "vibe-code", .root_module = mod });
     if (os == .windows and optimize != .debug) exe.subsystem = .windows;
     b.installArtifact(exe);

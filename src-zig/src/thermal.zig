@@ -11,6 +11,7 @@ const core = @import("core.zig");
 const ipc = @import("ipc.zig");
 const host = @import("host.zig");
 const tr = @import("settings.zig").tr;
+const elevated = @import("elevated.zig");
 const Allocator = std.mem.Allocator;
 
 pub const commands = .{
@@ -233,8 +234,6 @@ const ScriptResult = struct {
     @"error": ?[]const u8 = null,
 };
 
-var fan_counter: std.atomic.Value(u32) = .init(0);
-
 fn sys_set_fan_profile(c: *ipc.Call, a: struct { profile: []const u8 }) !?Thermal {
     if (!core.is_windows) return error.Unsupported;
     const ar = c.arena;
@@ -244,29 +243,7 @@ fn sys_set_fan_profile(c: *ipc.Call, a: struct { profile: []const u8 }) !?Therma
     } else return c.fail("unknown fan profile {s}", .{a.profile});
 
     const script = try core.resourceFile(ar, "asus_fan.ps1", ASUS_FAN_PS1);
-    const out = try std.fmt.allocPrint(ar, "{s}\\vibe-fan-{d}-{d}.json", .{ core.tempDir(), w.GetCurrentProcessId(), fan_counter.fetchAdd(1, .monotonic) });
-    const params = try std.fmt.allocPrint(ar, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{s}\" -Profile {s} -Out \"{s}\"", .{ script, a.profile, out });
-
-    var info = std.mem.zeroes(w.SHELLEXECUTEINFOW);
-    info.cbSize = @sizeOf(w.SHELLEXECUTEINFOW);
-    info.fMask = w.SEE_MASK_NOCLOSEPROCESS | w.SEE_MASK_NOASYNC;
-    info.lpVerb = std.unicode.utf8ToUtf16LeStringLiteral("runas");
-    info.lpFile = std.unicode.utf8ToUtf16LeStringLiteral("powershell.exe");
-    info.lpParameters = (try core.wide(ar, params)).ptr;
-    info.nShow = w.SW_HIDE;
-    if (w.ShellExecuteExW(&info) == 0) {
-        const err = w.GetLastError();
-        if (err == 1223) return c.failMsg(tr("Admin permission was declined", "Đã từ chối quyền quản trị"));
-        return c.fail("{s} (error {d})", .{ tr("Could not start PowerShell", "Không chạy được PowerShell"), err });
-    }
-    if (info.hProcess) |p| {
-        defer _ = w.CloseHandle(p);
-        if (w.WaitForSingleObject(p, 60_000) != 0) return c.failMsg(tr("The fan change took too long", "Đổi chế độ quạt quá lâu"));
-    }
-    defer std.Io.Dir.cwd().deleteFile(core.io, out) catch {};
-    const raw = core.readFileAlloc(ar, out, 1 << 16) catch return c.failMsg(tr("The fan change gave no answer", "Không nhận được kết quả đổi quạt"));
-    const body = if (std.mem.startsWith(u8, raw, "\xEF\xBB\xBF")) raw[3..] else raw;
-    const r = core.fromJson(ScriptResult, ar, body) catch return c.failMsg(tr("The fan change gave no answer", "Không nhận được kết quả đổi quạt"));
+    const r = try elevated.run(c, ScriptResult, script, try std.fmt.allocPrint(ar, "-Profile {s}", .{a.profile}), 60_000);
     if (!r.ok) return c.failMsg(r.@"error" orelse tr("Could not change the fan profile", "Không đổi được chế độ quạt"));
 
     const prev = loadState(ar);

@@ -4045,7 +4045,7 @@ button.usage-meter.temp-meter:hover {
   color: var(--text);
 }
 .sound-steps {
-  margin: 2px 9px 8px 26px;
+  margin: 2px 9px 8px 24px;
   padding: 0;
   font-size: 12px;
   line-height: 1.55;
@@ -4116,6 +4116,25 @@ button.usage-meter.temp-meter:hover {
   color: var(--text-2);
 }
 
+.sound-devices {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sound-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.sound-dot.on {
+  background: var(--green);
+}
+.sound-actions:has(+ .temp-error),
+.temp-pop > .sound-actions:last-child {
+  padding-bottom: 4px;
+}
 /* web tab: emulated screen sizes */
 .browser-stage {
   flex: 1;

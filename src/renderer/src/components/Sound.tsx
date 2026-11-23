@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { AudioLines, Download, Loader2, RefreshCw, Speaker } from 'lucide-react'
+import { AudioLines, Loader2, ShieldCheck, Trash2 } from 'lucide-react'
 import type { SoundInfo } from '../../../shared/types'
 import { useT, type T } from '../i18n'
 import { StatusPopover } from './Thermal'
-
-const DOWNLOAD_URL = 'https://sourceforge.net/projects/equalizerapo/files/latest/download'
 
 /** dB per band: 31 62 125 250 500 1k 2k 4k 8k 16k */
 const PRESETS: { id: string; label: (t: T) => string; bands: number[] }[] = [
@@ -19,7 +17,7 @@ const PRESETS: { id: string; label: (t: T) => string; bands: number[] }[] = [
 
 const freqLabel = (f: number): string => (f >= 1000 ? `${f / 1000}k` : String(f))
 
-/** Status-bar Sound item: a whole-machine equalizer through Equalizer APO. */
+/** Status-bar Sound item: a whole-machine equalizer through VIBE CODE's own audio filter. */
 export function SoundMeter(): React.JSX.Element | null {
   const [info, setInfo] = useState<SoundInfo | null>(null)
   const [open, setOpen] = useState(false)
@@ -46,11 +44,11 @@ export function SoundMeter(): React.JSX.Element | null {
 
 function SoundPanel({ info, onInfo, anchor, onClose }: { info: SoundInfo; onInfo: (i: SoundInfo) => void; anchor: HTMLElement | null; onClose: () => void }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
-  const [checking, setChecking] = useState(false)
+  const [busy, setBusy] = useState<'install' | 'remove' | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const t = useT()
 
-  // a slider drag writes Equalizer APO's config at most every 150 ms
+  // a slider drag writes the filter's eq.txt at most every 150 ms
   const save = (next: { enabled: boolean; preset: string; bands: number[] }, now = false): void => {
     onInfo({ ...info, ...next })
     if (timer.current) clearTimeout(timer.current)
@@ -63,12 +61,12 @@ function SoundPanel({ info, onInfo, anchor, onClose }: { info: SoundInfo; onInfo
   }
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), [])
 
-  const recheck = (): void => {
-    setChecking(true)
-    window.api.claude
-      .sound()
-      .then(onInfo, () => {})
-      .finally(() => setChecking(false))
+  const admin = (what: 'install' | 'remove'): void => {
+    setBusy(what)
+    setError(null)
+    ;(what === 'install' ? window.api.claude.soundInstall() : window.api.claude.soundRemove())
+      .then(onInfo, (e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null))
   }
 
   if (!info.installed)
@@ -78,24 +76,21 @@ function SoundPanel({ info, onInfo, anchor, onClose }: { info: SoundInfo; onInfo
           <AudioLines size={20} />
           <div>
             <div className="sound-title">{t('Sound equalizer', 'EQ âm thanh')}</div>
-            <div className="temp-sub">{t('Needs Equalizer APO (free, open source)', 'Cần Equalizer APO (miễn phí, mã nguồn mở)')}</div>
+            <div className="temp-sub">{t("VIBE CODE's own audio filter, for every app", 'Bộ lọc âm thanh riêng của VIBE CODE, cho mọi ứng dụng')}</div>
           </div>
         </div>
-        <ol className="sound-steps">
-          <li>{t('Download and run the Equalizer APO installer.', 'Tải và chạy bộ cài Equalizer APO.')}</li>
-          <li>{t('In the Configurator it opens, tick your speakers (Realtek) and headphones.', 'Trong Configurator hiện ra, tick loa (Realtek) và tai nghe của bạn.')}</li>
-          <li>{t('Restart Windows, then come back here.', 'Khởi động lại Windows rồi quay lại đây.')}</li>
-        </ol>
+        <ul className="sound-steps">
+          <li>{t('Works on devices without their own driver effects: HDMI / monitor speakers, many USB and Bluetooth headphones. Not yet on Realtek laptop speakers.', 'Dùng được cho thiết bị không có hiệu ứng riêng của driver: loa màn hình HDMI, nhiều tai nghe USB/Bluetooth. Loa laptop Realtek chưa hỗ trợ.')}</li>
+          <li>{t('Windows asks for admin once; sound pauses for a second while audio restarts.', 'Windows hỏi quyền quản trị một lần; âm thanh ngắt khoảng 1 giây khi khởi động lại dịch vụ âm thanh.')}</li>
+          <li>{t('Remove it any time from this panel.', 'Gỡ lúc nào cũng được ngay trong bảng này.')}</li>
+        </ul>
         <div className="sound-actions">
-          <button className="btn" onClick={recheck} disabled={checking}>
-            {checking ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
-            {t('Check again', 'Kiểm tra lại')}
-          </button>
-          <button className="btn btn-primary" onClick={() => void window.api.app.openExternal(DOWNLOAD_URL)}>
-            <Download size={13} />
-            {t('Download Equalizer APO', 'Tải Equalizer APO')}
+          <button className="btn btn-primary" onClick={() => admin('install')} disabled={busy !== null}>
+            {busy === 'install' ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
+            {t('Install the equalizer', 'Cài bộ chỉnh âm')}
           </button>
         </div>
+        {error && <div className="temp-error">{error}</div>}
       </StatusPopover>
     )
 
@@ -110,7 +105,7 @@ function SoundPanel({ info, onInfo, anchor, onClose }: { info: SoundInfo; onInfo
       <button className="menu-item temp-toggle" onClick={() => save({ enabled: !info.enabled, preset: info.preset, bands: info.bands }, true)}>
         <span className="temp-toggle-text">
           <span className="menu-item-main">{t('Equalizer', 'Bộ chỉnh âm (EQ)')}</span>
-          <span className="temp-toggle-sub">{t('For every app and device Equalizer APO is on', 'Cho mọi ứng dụng, trên loa/tai nghe đã bật Equalizer APO')}</span>
+          <span className="temp-toggle-sub">{t('For every app on this computer', 'Cho mọi ứng dụng trên máy')}</span>
         </span>
         <span className={`temp-switch${info.enabled ? ' on' : ''}`} />
       </button>
@@ -139,13 +134,22 @@ function SoundPanel({ info, onInfo, anchor, onClose }: { info: SoundInfo; onInfo
       </div>
       <div className="temp-note">{t('Bass: 31–250 Hz · voice: 1k–4k · treble: 8k–16k. Double-click a slider to reset it.', 'Bass: 31–250 Hz · giọng: 1k–4k · treble: 8k–16k. Bấm đúp thanh trượt để về 0.')}</div>
 
-      <button className="menu-item" onClick={() => window.api.claude.soundConfigurator().catch((e) => setError(e instanceof Error ? e.message : String(e)))}>
-        <Speaker size={13} />
-        <span className="temp-toggle-text">
-          <span className="menu-item-main">{t('Choose speakers / headphones', 'Chọn loa / tai nghe')}</span>
-          <span className="temp-toggle-sub">{t('No change heard? Turn Equalizer APO on for that device (admin, then restart)', 'Không nghe thay đổi? Bật Equalizer APO cho thiết bị đó (cần admin, rồi khởi động lại)')}</span>
-        </span>
-      </button>
+      <div className="temp-note sound-devices">
+        <span className={`sound-dot${info.running ? ' on' : ''}`} />
+        {info.running ? t('Working', 'Đang hoạt động') : t('Waiting for sound', 'Chờ có âm thanh')}
+        {info.devices.length > 0 && <> · {info.devices.join(', ')}</>}
+      </div>
+      {info.skipped.length > 0 && <div className="temp-note">{t('Not on', 'Không áp dụng cho')}: {info.skipped.join(', ')}</div>}
+      <div className="sound-actions">
+        <button className="btn" onClick={() => admin('install')} disabled={busy !== null} title={t('Run the install again, e.g. after pairing new headphones', 'Cài lại, ví dụ sau khi kết nối tai nghe mới')}>
+          {busy === 'install' ? <Loader2 size={13} className="spin" /> : <ShieldCheck size={13} />}
+          {t('Add new devices', 'Thêm thiết bị mới')}
+        </button>
+        <button className="btn" onClick={() => admin('remove')} disabled={busy !== null}>
+          {busy === 'remove' ? <Loader2 size={13} className="spin" /> : <Trash2 size={13} />}
+          {t('Remove', 'Gỡ bộ lọc')}
+        </button>
+      </div>
       {error && <div className="temp-error">{error}</div>}
     </StatusPopover>
   )

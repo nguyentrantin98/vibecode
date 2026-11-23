@@ -159,10 +159,15 @@ export interface ThermalInfo {
   gpuFanRpm: number | null
 }
 
-/** System-wide equalizer through Equalizer APO (src-zig/src/audio.zig) */
+/** System-wide equalizer: VIBE CODE's own audio filter (src-zig/apo, src-zig/src/audio.zig) */
 export interface SoundInfo {
+  /** the filter is in Windows' audio chain */
   installed: boolean
-  configDir: string | null
+  /** it processed sound in the last few seconds */
+  running: boolean
+  /** speakers / headphones it was put on, and the ones it could not be */
+  devices: string[]
+  skipped: string[]
   enabled: boolean
   preset: string
   /** dB per band, in `freqs` order */

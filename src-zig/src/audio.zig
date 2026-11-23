@@ -1,97 +1,58 @@
-//! The status bar's Sound panel: a 10-band equalizer for the whole machine through Equalizer APO
-//! (a system-wide audio filter, installed separately). Equalizer APO reads its config.txt and
-//! re-applies it as soon as the file changes, so a change here is heard at once.
+//! The status bar's Sound panel: a 10-band equalizer for the whole machine, through VIBE CODE's own
+//! audio processing object (src-zig/apo, built into vibe-eq-apo.dll and embedded here).
 //!
-//! config.txt is written whole; whatever was there before VIBE CODE first wrote it is kept as
-//! config-before-vibecode.txt next to it.
+//! Installing it is the one admin step (eq_apo.ps1, one UAC prompt): it puts the dll in Windows'
+//! audio chain of each speaker / headphones. After that the app only writes the gains to
+//! %ProgramData%\VIBE CODE Audio\eq.txt, which the APO picks up within a quarter second.
 
 const std = @import("std");
 const core = @import("core.zig");
 const ipc = @import("ipc.zig");
-const host = @import("host.zig");
 const tr = @import("settings.zig").tr;
+const elevated = @import("elevated.zig");
 const Allocator = std.mem.Allocator;
 
 pub const commands = .{
     .{ "sound_status", sound_status },
     .{ "sound_set", sound_set },
-    .{ "sound_open_configurator", sound_open_configurator },
+    .{ "sound_install", sound_install },
+    .{ "sound_remove", sound_remove },
 };
 
-/// band centres in Hz, the classic 10-band graphic EQ
+const APO_DLL = if (core.is_windows) @embedFile("vibe-eq-apo.dll") else "";
+const INSTALL_PS1 = @embedFile("eq_apo.ps1");
+
+/// band centres in Hz (the APO uses the same list, apo/dsp.zig)
 const FREQS = [_]u32{ 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 };
-const HEADER = "# Written by VIBE CODE (status bar > Sound). Your earlier config: config-before-vibecode.txt";
 
 const State = struct {
     enabled: bool = false,
     preset: []const u8 = "flat",
     /// dB per band, FREQS order
     bands: []const f64 = &.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    /// the speakers / headphones the last install put the equalizer on
+    devices: []const []const u8 = &.{},
+    skipped: []const []const u8 = &.{},
 };
 
 const Status = struct {
-    /// Equalizer APO is installed
+    /// the APO is registered with Windows
     installed: bool,
-    configDir: ?[]const u8,
+    /// it processed sound in the last few seconds (status.txt is fresh)
+    running: bool,
+    devices: []const []const u8,
+    skipped: []const []const u8,
     enabled: bool,
     preset: []const u8,
     bands: []const f64,
     freqs: []const u32,
 };
 
-// ---------------- Equalizer APO ----------------
+// ---------------- files ----------------
 
-extern "advapi32" fn RegGetValueW(key: usize, sub_key: [*:0]const u16, value: [*:0]const u16, flags: u32, kind: ?*u32, data: ?*anyopaque, size: ?*u32) callconv(.winapi) i32;
-const HKEY_LOCAL_MACHINE: usize = 0x80000002;
-const RRF_RT_REG_SZ: u32 = 0x2;
-/// read the 64-bit registry view even from a 32-bit build
-const RRF_SUBKEY_WOW6464KEY: u32 = 0x00010000;
-
-fn regString(a: Allocator, comptime sub: []const u8, comptime name: []const u8) ?[]u8 {
-    var buf: [1024]u16 = undefined;
-    var size: u32 = @sizeOf(@TypeOf(buf));
-    const k = std.unicode.utf8ToUtf16LeStringLiteral(sub);
-    const n = std.unicode.utf8ToUtf16LeStringLiteral(name);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, k, n, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, null, &buf, &size) != 0) return null;
-    const len = std.mem.indexOfScalar(u16, buf[0..@min(buf.len, size / 2)], 0) orelse size / 2;
-    if (len == 0) return null;
-    return std.unicode.wtf16LeToWtf8Alloc(a, buf[0..len]) catch null;
+fn dataDir(a: Allocator) ![]u8 {
+    return std.fs.path.join(a, &.{ core.getenv("ProgramData") orelse "C:\\ProgramData", "VIBE CODE Audio" });
 }
-
-fn installDir(a: Allocator) ?[]const u8 {
-    if (regString(a, "SOFTWARE\\EqualizerAPO", "InstallPath")) |p| if (core.exists(p)) return p;
-    const def = "C:\\Program Files\\EqualizerAPO";
-    return if (core.exists(def)) def else null;
-}
-
-fn configDir(a: Allocator) ?[]const u8 {
-    if (regString(a, "SOFTWARE\\EqualizerAPO", "ConfigPath")) |p| if (core.exists(p)) return p;
-    const dir = installDir(a) orelse return null;
-    const p = std.fs.path.join(a, &.{ dir, "config" }) catch return null;
-    return if (core.exists(p)) p else null;
-}
-
-/// config.txt for these settings: off is an empty (pass-through) config.
-pub fn configText(a: Allocator, s: State) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(a, HEADER ++ "\r\n");
-    if (!s.enabled) {
-        try out.appendSlice(a, "# equalizer off\r\n");
-        return out.items;
-    }
-    // lower the volume by the biggest boost so boosted bands cannot clip
-    var peak: f64 = 0;
-    for (s.bands) |g| peak = @max(peak, g);
-    try out.print(a, "Preamp: {d:.1} dB\r\nGraphicEQ: ", .{if (peak > 0) -peak else 0});
-    for (FREQS, 0..) |f, i| {
-        const g = if (i < s.bands.len) std.math.clamp(s.bands[i], -15, 15) else 0;
-        try out.print(a, "{s}{d} {d:.1}", .{ if (i == 0) "" else "; ", f, g });
-    }
-    try out.appendSlice(a, "\r\n");
-    return out.items;
-}
-
-// ---------------- commands ----------------
 
 fn statePath(a: Allocator) ![]u8 {
     return core.dataPath(a, &.{"sound.json"});
@@ -100,21 +61,75 @@ fn statePath(a: Allocator) ![]u8 {
 fn loadState(a: Allocator) State {
     const path = statePath(a) catch return .{};
     const raw = core.readFileAlloc(a, path, 1 << 16) catch return .{};
-    const s = core.fromJson(State, a, raw) catch return .{};
-    return if (s.bands.len == FREQS.len) s else .{ .enabled = s.enabled, .preset = s.preset };
+    var s = core.fromJson(State, a, raw) catch return .{};
+    if (s.bands.len != FREQS.len) s.bands = (State{}).bands;
+    return s;
+}
+
+fn saveState(a: Allocator, s: State) void {
+    const path = statePath(a) catch return;
+    const json = core.toJson(a, s) catch return;
+    core.writeAtomic(path, json) catch {};
+}
+
+/// eq.txt: "1 -8 -6 …": on/off, then the gains (apo/dsp.zig Settings.parse)
+pub fn eqText(a: Allocator, s: State) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(a, if (s.enabled) "1" else "0");
+    for (0..FREQS.len) |i| {
+        const g = if (i < s.bands.len) std.math.clamp(s.bands[i], -15, 15) else 0;
+        try out.print(a, " {d:.1}", .{g});
+    }
+    try out.appendSlice(a, "\r\n");
+    return out.items;
+}
+
+fn writeEq(a: Allocator, s: State) !void {
+    const path = try std.fs.path.join(a, &.{ try dataDir(a), "eq.txt" });
+    try core.writeFile(path, try eqText(a, s));
+}
+
+// ---------------- registration ----------------
+
+extern "advapi32" fn RegGetValueW(key: usize, sub_key: [*:0]const u16, value: ?[*:0]const u16, flags: u32, kind: ?*u32, data: ?*anyopaque, size: ?*u32) callconv(.winapi) i32;
+const HKEY_LOCAL_MACHINE: usize = 0x80000002;
+const RRF_RT_REG_SZ: u32 = 0x2;
+const RRF_SUBKEY_WOW6464KEY: u32 = 0x00010000;
+
+fn installed() bool {
+    if (!core.is_windows) return false;
+    var buf: [600]u16 = undefined;
+    var size: u32 = @sizeOf(@TypeOf(buf));
+    const key = std.unicode.utf8ToUtf16LeStringLiteral("SOFTWARE\\Classes\\CLSID\\{A1C947FD-C3DA-4823-B683-41C0BA386B75}\\InprocServer32");
+    return RegGetValueW(HKEY_LOCAL_MACHINE, key, null, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, null, &buf, &size) == 0;
+}
+
+/// status.txt is rewritten every 2.5 s while the APO has a stream open
+fn running(a: Allocator) bool {
+    const dir = dataDir(a) catch return false;
+    const path = std.fs.path.join(a, &.{ dir, "status.txt" }) catch return false;
+    const st = std.Io.Dir.cwd().statFile(core.io, path, .{}) catch return false;
+    const now = std.Io.Clock.real.now(core.io);
+    const age_ns = now.nanoseconds - st.mtime.nanoseconds;
+    return age_ns >= 0 and age_ns < 10 * std.time.ns_per_s;
 }
 
 fn status(a: Allocator) Status {
     const s = loadState(a);
+    const on = installed();
     return .{
-        .installed = installDir(a) != null,
-        .configDir = configDir(a),
+        .installed = on,
+        .running = on and running(a),
+        .devices = s.devices,
+        .skipped = s.skipped,
         .enabled = s.enabled,
         .preset = s.preset,
         .bands = s.bands,
         .freqs = &FREQS,
     };
 }
+
+// ---------------- commands ----------------
 
 fn sound_status(c: *ipc.Call) !Status {
     return status(c.arena);
@@ -123,49 +138,64 @@ fn sound_status(c: *ipc.Call) !Status {
 fn sound_set(c: *ipc.Call, a: struct { enabled: bool, preset: []const u8, bands: []const f64 }) !Status {
     const ar = c.arena;
     if (a.bands.len != FREQS.len) return c.fail("expected {d} bands", .{FREQS.len});
-    const dir = configDir(ar) orelse return c.failMsg(tr("Equalizer APO is not installed", "Chưa cài Equalizer APO"));
-    const s: State = .{ .enabled = a.enabled, .preset = a.preset, .bands = a.bands };
-    const cfg = try std.fs.path.join(ar, &.{ dir, "config.txt" });
-
-    // keep the user's own config the first time
-    const backup = try std.fs.path.join(ar, &.{ dir, "config-before-vibecode.txt" });
-    if (core.readFileAlloc(ar, cfg, 4 << 20)) |old| {
-        if (!std.mem.startsWith(u8, old, HEADER) and !core.exists(backup))
-            core.writeFile(backup, old) catch {};
-    } else |_| {}
-
-    core.writeFile(cfg, try configText(ar, s)) catch |e|
-        return c.fail("{s} {s}: {s}", .{ tr("Could not write", "Không ghi được"), cfg, @errorName(e) });
-    core.writeAtomic(try statePath(ar), try core.toJson(ar, s)) catch {};
+    var s = loadState(ar);
+    s.enabled = a.enabled;
+    s.preset = a.preset;
+    s.bands = a.bands;
+    saveState(ar, s);
+    if (installed()) writeEq(ar, s) catch |e|
+        return c.fail("{s}: {s}", .{ tr("Could not save the equalizer", "Không lưu được EQ"), @errorName(e) });
     return status(ar);
 }
 
-/// Equalizer APO's Configurator, where the speakers / headphones it filters are picked (admin).
-fn sound_open_configurator(c: *ipc.Call) !void {
-    if (!core.is_windows) return error.Unsupported;
-    const w = host.win.c;
-    const dir = installDir(c.arena) orelse return c.failMsg(tr("Equalizer APO is not installed", "Chưa cài Equalizer APO"));
-    const exe = try std.fs.path.join(c.arena, &.{ dir, "Configurator.exe" });
-    var info = std.mem.zeroes(w.SHELLEXECUTEINFOW);
-    info.cbSize = @sizeOf(w.SHELLEXECUTEINFOW);
-    info.lpVerb = std.unicode.utf8ToUtf16LeStringLiteral("runas");
-    info.lpFile = (try core.wide(c.arena, exe)).ptr;
-    info.nShow = w.SW_SHOWNORMAL;
-    if (w.ShellExecuteExW(&info) == 0) {
-        const err = w.GetLastError();
-        if (err == 1223) return c.failMsg(tr("Admin permission was declined", "Đã từ chối quyền quản trị"));
-        return c.fail("{s} (error {d})", .{ tr("Could not open the Configurator", "Không mở được Configurator"), err });
-    }
+const ScriptResult = struct {
+    ok: bool = false,
+    devices: []const []const u8 = &.{},
+    skipped: []const []const u8 = &.{},
+    @"error": ?[]const u8 = null,
+};
+
+fn runScript(c: *ipc.Call, action: []const u8) !ScriptResult {
+    const ar = c.arena;
+    const script = try core.resourceFile(ar, "eq_apo.ps1", INSTALL_PS1);
+    const dll = try core.resourceFile(ar, "vibe-eq-apo.dll", APO_DLL);
+    const r = try elevated.run(c, ScriptResult, script, try std.fmt.allocPrint(ar, "-Action {s} -Dll \"{s}\"", .{ action, dll }), 120_000);
+    if (!r.ok) return c.failMsg(r.@"error" orelse tr("The equalizer step failed", "Bước cài EQ bị lỗi"));
+    return r;
 }
 
-test "configText" {
+/// Puts the equalizer in Windows' audio chain (admin), then hands it the saved gains.
+fn sound_install(c: *ipc.Call) !Status {
+    if (!core.is_windows) return error.Unsupported;
+    const ar = c.arena;
+    const r = try runScript(c, "install");
+    var s = loadState(ar);
+    s.devices = r.devices;
+    s.skipped = r.skipped;
+    saveState(ar, s);
+    writeEq(ar, s) catch {};
+    return status(ar);
+}
+
+/// Takes it out of every device's chain and unregisters it (admin).
+fn sound_remove(c: *ipc.Call) !Status {
+    if (!core.is_windows) return error.Unsupported;
+    const ar = c.arena;
+    _ = try runScript(c, "remove");
+    var s = loadState(ar);
+    s.devices = &.{};
+    s.skipped = &.{};
+    saveState(ar, s);
+    return status(ar);
+}
+
+test "eqText" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const on = try configText(a, .{ .enabled = true, .bands = &.{ -8, -6, -4, -2, 0, 0, 1.5, 3, 0, 0 } });
-    try std.testing.expect(std.mem.indexOf(u8, on, "Preamp: -3.0 dB\r\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, on, "GraphicEQ: 31 -8.0; 62 -6.0; 125 -4.0; 250 -2.0; 500 0.0; 1000 0.0; 2000 1.5; 4000 3.0; 8000 0.0; 16000 0.0\r\n") != null);
-    const off = try configText(a, .{ .enabled = false });
-    try std.testing.expect(std.mem.indexOf(u8, off, "GraphicEQ") == null);
-    try std.testing.expect(std.mem.startsWith(u8, off, HEADER));
+    try std.testing.expectEqualStrings(
+        "1 -8.0 -6.0 -4.0 -2.0 0.0 0.0 1.5 3.0 0.0 0.0\r\n",
+        try eqText(a, .{ .enabled = true, .bands = &.{ -8, -6, -4, -2, 0, 0, 1.5, 3, 0, 0 } }),
+    );
+    try std.testing.expect(std.mem.startsWith(u8, try eqText(a, .{}), "0 0.0"));
 }

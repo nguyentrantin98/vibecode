@@ -121,10 +121,12 @@ export const api = {
     setCooling: (o: { activeCooling?: boolean; turboOff?: boolean }): Promise<ThermalInfo | null> => invoke('sys_set_cooling', o),
     /** ASUS firmware fan profile, or 'full' / 'auto' CPU fan speed; Windows asks for admin */
     setFanProfile: (profile: FanProfile | 'full' | 'auto'): Promise<ThermalInfo | null> => invoke('sys_set_fan_profile', { profile }),
-    /** whole-machine equalizer (Equalizer APO) */
+    /** whole-machine equalizer (VIBE CODE's own audio filter) */
     sound: (): Promise<SoundInfo> => invoke('sound_status'),
     setSound: (o: { enabled: boolean; preset: string; bands: number[] }): Promise<SoundInfo> => invoke('sound_set', o),
-    soundConfigurator: (): Promise<void> => invoke('sound_open_configurator'),
+    /** put the filter in Windows' audio chain / take it out (Windows asks for admin) */
+    soundInstall: (): Promise<SoundInfo> => invoke('sound_install'),
+    soundRemove: (): Promise<SoundInfo> => invoke('sound_remove'),
     getProjectBypass: (folder: string): Promise<boolean> => invoke('claude_get_project_bypass', { folder }),
     setProjectBypass: (folder: string, on: boolean): Promise<boolean> => invoke('claude_set_project_bypass', { folder, on }),
     apiKey: (): Promise<ClaudeApiKey> => invoke('claude_api_key'),
