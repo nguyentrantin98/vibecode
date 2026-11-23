@@ -197,10 +197,16 @@ export function BrowserTab({ chatKey, tabId, active, onScreen }: { chatKey: stri
         place()
       })
     }
-    place()
     // parked: nothing to follow. (Every tab of every chat used to watch the whole document, so each
     // terminal redraw made all of them measure the layout.)
-    if (!live) return
+    if (!live) {
+      // switched to another Web tab: that page is shown (on top) first, this one hides a moment
+      // later — hiding first left a blank pane flashing between the two
+      if (!onScreen) return place()
+      const id = window.setTimeout(place, 120)
+      return () => window.clearTimeout(id)
+    }
+    place()
     const ro = new ResizeObserver(soon)
     ro.observe(el)
     // menus / dialogs opening, panes sliding, the chat switching. Changes inside a terminal or an
@@ -244,7 +250,7 @@ export function BrowserTab({ chatKey, tabId, active, onScreen }: { chatKey: stri
       document.removeEventListener('transitionrun', follow, true)
       document.removeEventListener('animationstart', follow, true)
     }
-  }, [live, label, zoom, home])
+  }, [live, onScreen, label, zoom, home])
 
   const pickDevice = (key: string): void => {
     const next = DEVICES.find((d) => d.key === key) ?? DEVICES[0]
