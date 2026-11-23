@@ -62,7 +62,5 @@
   }
 
   window.__VIBE__ = { invoke, listen, Channel, recv }
-  // pages written for Tauri (capture, toast) call this
-  window.__TAURI_INTERNALS__ = { invoke }
   if (window.chrome && window.chrome.webview) window.chrome.webview.addEventListener('message', (e) => recv(e.data))
 })()

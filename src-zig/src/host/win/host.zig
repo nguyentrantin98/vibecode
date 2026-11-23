@@ -1,6 +1,5 @@
 //! The Windows host: Win32 windows, one shared WebView2 environment, the app's pages served from
-//! memory at http://tauri.localhost (the origin the Tauri build used, so the pages' localStorage
-//! and the WebView2 profile carry over), page → native calls and native → page messages.
+//! memory at http://vibe.localhost, page → native calls and native → page messages.
 //!
 //! Everything here runs on the UI thread unless it says otherwise; other threads get there with
 //! `onUi` / `onUiSync`.
@@ -17,7 +16,7 @@ const Allocator = std.mem.Allocator;
 const gpa = &core.gpa;
 
 pub const Rect = shared.Rect;
-pub const origin = "http://tauri.localhost";
+pub const origin = "http://vibe.localhost";
 pub const identifier = "vn.tinjs.vibecode";
 
 const WM_RUN = c.WM_APP + 1;
@@ -967,7 +966,7 @@ const resize_script =
 
 // ---------------- serving the app's pages ----------------
 
-const csp = "default-src 'self'; connect-src 'self' http://tauri.localhost ws://localhost:* http://localhost:*; script-src 'self'; style-src 'self' 'unsafe-inline'; " ++
+const csp = "default-src 'self'; connect-src 'self' " ++ origin ++ " ws://localhost:* http://localhost:*; script-src 'self'; style-src 'self' 'unsafe-inline'; " ++
     "img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; worker-src 'self' blob:; frame-src http://127.0.0.1:*";
 
 const Pending = struct {

@@ -1,7 +1,8 @@
 # Porting src-tauri (Rust) to src-zig (Zig 0.17.1)
 
-The app is being moved from Tauri/Rust (`../src-tauri/src/*.rs`, the reference: behaviour must stay
-the same) to a plain Zig executable with its own Win32 + WebView2 host. The renderer
+The app was moved from Tauri/Rust (`src-tauri/src/*.rs`, removed after v0.2.29; `git show
+v0.2.29:src-tauri/src/<file>.rs` for the reference: behaviour must stay the same) to a plain Zig
+executable with its own Win32 + WebView2 host. The renderer
 (`../src/renderer`) is unchanged: it calls `invoke(cmd, args)` and listens to events exactly as it
 did with Tauri (`../src/renderer/src/api.ts` lists every command with its argument names and the
 shape of what it expects back; `../src/renderer/src/native.ts` is the page side of the bridge).
@@ -163,7 +164,7 @@ Things already confirmed here:
   the running app, and every place you depend on another module.
 
 SQLite: `const sq = @import("sqlite");` (the C API: `sq.sqlite3_open_v2`, `sq.sqlite3_prepare_v2`, …).
-Files a module embeds (`@embedFile`) must live under `src-zig/src`: copy them from `src-tauri/src`.
+Files a module embeds (`@embedFile`) must live under `src-zig/src`: copy them from `src-tauri/src` at v0.2.29.
 
 Win32 gotchas seen so far:
 - Handle constants that are not real pointers (`HWND_TOPMOST`, `HWND_BROADCAST`, `HKEY_CURRENT_USER`;

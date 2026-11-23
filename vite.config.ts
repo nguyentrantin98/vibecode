@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 
-// The UI of the Tauri app (src-tauri). `tauri dev` runs `vite` on :5173; `tauri build` bundles out/renderer.
+// The app's UI. `npm run dev` serves it on :5173; `npm run build` bundles out/renderer into src-zig.
 export default defineConfig({
   root: 'src/renderer',
   base: './',

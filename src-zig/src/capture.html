@@ -55,7 +55,7 @@ textarea#txt { position: fixed; display: none; min-width: 40px; padding: 2px 4px
 <div id="bar"></div>
 <textarea id="txt" spellcheck="false"></textarea>
 <script>
-const invoke = (cmd, args, opts) => window.__TAURI_INTERNALS__.invoke(cmd, args, opts)
+const invoke = (cmd, args, opts) => window.__VIBE__.invoke(cmd, args, opts)
 const $ = (id) => document.getElementById(id)
 const base = $('base'), ov = $('ov'), bctx = base.getContext('2d'), octx = ov.getContext('2d')
 const bar = $('bar'), props = $('props'), hint = $('hint'), sizeTag = $('size'), mag = $('mag'), txt = $('txt')

@@ -27,7 +27,7 @@ html, body { margin: 0; background: transparent; overflow: hidden; font-family: 
 </style></head><body><div id="stack"></div><script>
 const LIFE = 7000, MAX = 3
 const stack = document.getElementById('stack')
-const invoke = (cmd, args) => { try { return window.__TAURI_INTERNALS__.invoke(cmd, args) } catch (e) {} }
+const invoke = (cmd, args) => { try { return window.__VIBE__.invoke(cmd, args) } catch (e) {} }
 let hovering = false
 document.body.addEventListener('mouseenter', () => { hovering = true })
 document.body.addEventListener('mouseleave', () => { hovering = false })

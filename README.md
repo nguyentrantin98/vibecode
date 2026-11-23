@@ -6,8 +6,6 @@ Desktop workspace for **Claude Code**: several parallel chats, a Monaco editor (
 
 **[⬇ Download VIBE CODE for Windows (x64)](https://github.com/nguyentrantin98/vibecode/releases/latest/download/vibe-code_x64-setup.exe)**
 
-**[⬇ Download VIBE CODE for macOS (Apple Silicon + Intel)](https://github.com/nguyentrantin98/vibecode/releases/latest/download/vibe-code_universal.dmg)**
-
 All versions and release notes: [Releases](https://github.com/nguyentrantin98/vibecode/releases).
 
 Run the installer (no admin rights needed, it installs for the current user). VIBE CODE also needs:
@@ -70,7 +68,7 @@ Click **Guake** in the title bar (or use the tray icon menu). VIBE CODE then liv
 ## Development
 
 Stack: Zig (own Win32 + WebView2 host) · React · TypeScript · Vite · Monaco · xterm.js (WebGL) · ConPTY.
-The macOS build is still the Tauri / Rust one in `src-tauri` until `src-zig` has its macOS host.
+Windows only for now: `src-zig` has no macOS host yet.
 
 ```bash
 npm install
@@ -80,8 +78,10 @@ npm run release      # bump the patch version, build, make the installer, commit
 npm run release 0.3.0  # same, with an explicit version
 ```
 
-Building needs Node 24+ and Zig 0.17.1. The installer is made with the NSIS the Tauri CLI
-downloads to `%LOCALAPPDATA%\tauri\NSIS` (`src-zig/installer/installer.nsi` is Tauri's template, so
+Building needs Node 24+ and Zig 0.17.1. The installer is made with NSIS 3 in
+`%LOCALAPPDATA%\tauri\NSIS`, with the `nsis_tauri_utils.dll` plugin from
+[tauri-apps/nsis-tauri-utils](https://github.com/tauri-apps/nsis-tauri-utils/releases) in its
+`Plugins\x86-unicode\additional` (`src-zig/installer/installer.nsi` is Tauri's template, so
 updates install over a Tauri-built copy). The app itself has no Node runtime.
 
 `npm run release` uploads the installer as `vibe-code_x64-setup.exe` on a `vX.Y.Z` release. The
@@ -97,7 +97,6 @@ download link above and the in-app Update button both use the latest release. It
   browser (`browser.zig`, native WebView2 tabs that sleep when hidden), the MCP server Claude's tools
   talk to (`mcp.zig`), window / tray / drop-down mode (`windowing.zig`), screen capture
   (`capture.zig` + `capture.html`), updates (`appcmds.zig`), the window host (`host/`)
-- `src-tauri/src`: the Rust backend it was ported from (still builds the macOS app)
 - `src/renderer/src/api.ts`: `window.api`, the page's bridge to the native commands and events
 - `src/renderer/src`: UI (`components/`), state (`store.ts`, `actions.ts`), terminals, Monaco setup
 - `scripts/release.cjs`: build and publish a release
