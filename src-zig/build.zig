@@ -9,7 +9,18 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) !void {
-    const target = b.standardTargetOptions(.{});
+    // Without -Dtarget/-Dcpu Zig compiles for the CPU of the build machine (AVX2, AVX-VNNI, … on
+    // the release PC): the app then dies at once (illegal instruction) on older or low-end CPUs.
+    // On an x64 Windows host the default is x86_64_v2 (SSE4.2, POPCNT), which any PC that runs
+    // Windows 11 has; -Dcpu=native still gives a build for this machine only.
+    const host = b.graph.host.result;
+    const target = b.standardTargetOptions(.{
+        .default_target = if (host.cpu.arch == .x86_64 and host.os.tag == .windows) .{
+            .cpu_arch = .x86_64,
+            .os_tag = .windows,
+            .cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v2 },
+        } else .{},
+    });
     const optimize = b.standardOptimizeOption(.{});
     const os = target.result.os.tag;
     const renderer = b.option([]const u8, "renderer", "folder of the built pages (default ../out/renderer)") orelse "../out/renderer";
