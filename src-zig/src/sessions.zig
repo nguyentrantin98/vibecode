@@ -417,7 +417,12 @@ fn newerFirst(_: void, x: SessionInfo, y: SessionInfo) bool {
     return if (x.updated != y.updated) x.updated > y.updated else std.mem.lessThan(u8, x.id, y.id);
 }
 
-const Job = struct { file: []const u8, dir: []const u8 };
+const Job = struct {
+    file: []const u8,
+    dir: []const u8,
+    /// a Codex rollout, not a Claude transcript
+    codex: bool = false,
+};
 
 /// Unchanged files are a cache hit (one stat); a cold start reads them on a few threads.
 const Readers = struct {
@@ -435,7 +440,9 @@ const Readers = struct {
             const i = r.next.fetchAdd(1, .monotonic);
             if (i >= r.jobs.len) return;
             _ = scratch.reset(.retain_capacity);
-            const info = (readSession(scratch.allocator(), r.jobs[i].file, r.jobs[i].dir) catch continue) orelse continue;
+            const job = r.jobs[i];
+            const read = if (job.codex) readRollout(scratch.allocator(), job.file) else readSession(scratch.allocator(), job.file, job.dir);
+            const info = (read catch continue) orelse continue;
             r.mutex.lock();
             defer r.mutex.unlock();
             r.found.append(r.a, info.clone(r.a) catch continue) catch {};
@@ -446,8 +453,9 @@ const Readers = struct {
 fn listSessions(a: Allocator) ![]const ProjectGroup {
     const root = try projectsDir(a);
     var jobs: std.ArrayList(Job) = .empty;
-    {
-        var rd = Dir.cwd().openDir(core.io, root, .{ .iterate = true }) catch return &.{};
+    // (a PC with Codex alone has no such folder)
+    if (Dir.cwd().openDir(core.io, root, .{ .iterate = true })) |opened| {
+        var rd = opened;
         defer rd.close(core.io);
         var it = rd.iterate();
         while (it.next(core.io) catch null) |e| {
@@ -461,7 +469,9 @@ fn listSessions(a: Allocator) ![]const ProjectGroup {
                     try jobs.append(a, .{ .file = try std.fs.path.join(a, &.{ root, d, f.name }), .dir = d });
             }
         }
-    }
+    } else |_| {}
+    // Codex's chats, one file each
+    if (codexHome(a)) |home| try rolloutJobs(a, try std.fs.path.join(a, &.{ home, "sessions" }), 0, &jobs) else |_| {}
 
     // files that are gone drop out of the cache
     {
@@ -488,9 +498,21 @@ fn listSessions(a: Allocator) ![]const ProjectGroup {
         readers.run();
         for (threads) |t| if (t) |th| th.join();
     }
-    // Codex's chats go under the same projects
+    // Codex's chats go under the same projects. Its database knows them best (the name it gave
+    // each, the archived ones); a rollout file only speaks for a chat the database does not have
+    // (a Codex from before it kept one).
     if (codexDb(a)) |db| {
-        if (codexSessions(a, db)) |list| try readers.found.appendSlice(a, list) else |_| {}
+        var known: std.StringHashMapUnmanaged(void) = .empty;
+        if (codexSessions(a, db, &known)) |list| {
+            var n: usize = 0;
+            for (readers.found.items) |x| {
+                if (x.agent != null and known.contains(x.id)) continue;
+                readers.found.items[n] = x;
+                n += 1;
+            }
+            readers.found.shrinkRetainingCapacity(n);
+            try readers.found.appendSlice(a, list);
+        } else |_| {}
     }
     const all = readers.found.items;
     // newest first, so a group takes its folder spelling from its latest session
@@ -588,6 +610,11 @@ fn plainPath(p: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, p, "\\\\?\\") and !std.mem.startsWith(u8, p, "\\\\?\\UNC\\")) p[4..] else p;
 }
 
+/// Whether `p` can be a folder's path at all (one read out of a message may be anything).
+fn pathLike(p: []const u8) bool {
+    return p.len > 0 and p.len < 1024 and std.fs.path.isAbsolute(p) and std.mem.indexOfAny(u8, p[@min(p.len, 3)..], "<>|\"?*:\r\n\t") == null;
+}
+
 /// Codex's timestamps are seconds; newer columns are milliseconds.
 fn toMs(t: i64) i64 {
     return if (t > 0 and t < 100_000_000_000) t * 1000 else t;
@@ -595,15 +622,16 @@ fn toMs(t: i64) i64 {
 
 /// The conversations in Codex's database that are not archived, as sessions of the agent "codex"
 /// (`codex resume <id>` picks one back up). Read-only: Codex may have the file open.
-fn codexSessions(a: Allocator, db_path: []const u8) ![]const SessionInfo {
+/// `known` gets the id of every one of them, archived or not.
+fn codexSessions(a: Allocator, db_path: []const u8, known: *std.StringHashMapUnmanaged(void)) ![]const SessionInfo {
     var db: ?*sq.sqlite3 = null;
     defer _ = sq.sqlite3_close(db);
     if (sq.sqlite3_open_v2((try a.dupeSentinel(u8, db_path, 0)).ptr, &db, sq.SQLITE_OPEN_READONLY | sq.SQLITE_OPEN_NOMUTEX, null) != sq.SQLITE_OK) return error.Sqlite;
     _ = sq.sqlite3_busy_timeout(db, 500);
     // `name` (what Codex or the user called the chat) came with a later schema than `title`
     const queries = [_][*:0]const u8{
-        "SELECT id, cwd, COALESCE(NULLIF(name, ''), title), created_at, updated_at FROM threads WHERE archived = 0",
-        "SELECT id, cwd, title, created_at, updated_at FROM threads WHERE archived = 0",
+        "SELECT id, cwd, COALESCE(NULLIF(name, ''), title), created_at, updated_at, archived FROM threads",
+        "SELECT id, cwd, title, created_at, updated_at, archived FROM threads",
     };
     var stmt: ?*sq.sqlite3_stmt = null;
     for (queries) |sql| {
@@ -618,8 +646,9 @@ fn codexSessions(a: Allocator, db_path: []const u8) ![]const SessionInfo {
         if (rc == sq.SQLITE_DONE) break;
         if (rc != sq.SQLITE_ROW) return error.Sqlite;
         const id = columnText(a, stmt, 0) catch continue;
+        if (id.len > 0) try known.put(a, id, {});
         const cwd = plainPath(columnText(a, stmt, 1) catch continue);
-        if (id.len == 0 or cwd.len == 0) continue;
+        if (id.len == 0 or !pathLike(cwd) or sq.sqlite3_column_int64(stmt, 5) != 0) continue;
         // one line, like the titles of Claude's chats
         var lines = std.mem.tokenizeAny(u8, columnText(a, stmt, 2) catch "", "\r\n");
         const first = std.mem.trim(u8, lines.next() orelse "", " \t");
@@ -635,6 +664,142 @@ fn codexSessions(a: Allocator, db_path: []const u8) ![]const SessionInfo {
         });
     }
     return out.items;
+}
+
+/// Every `rollout-*.jsonl` under Codex's `sessions/<year>/<month>/<day>/`. (Those a newer Codex
+/// compressed, `.jsonl.zst`, are in its database.)
+fn rolloutJobs(a: Allocator, dir_path: []const u8, depth: usize, jobs: *std.ArrayList(Job)) !void {
+    var dir = Dir.cwd().openDir(core.io, dir_path, .{ .iterate = true }) catch return;
+    defer dir.close(core.io);
+    var it = dir.iterate();
+    while (it.next(core.io) catch null) |e| {
+        if (e.kind == .directory) {
+            if (depth < 3) try rolloutJobs(a, try std.fs.path.join(a, &.{ dir_path, e.name }), depth + 1, jobs);
+        } else if (std.mem.startsWith(u8, e.name, "rollout-") and std.mem.endsWith(u8, e.name, ".jsonl")) {
+            try jobs.append(a, .{ .file = try std.fs.path.join(a, &.{ dir_path, e.name }), .dir = "", .codex = true });
+        }
+    }
+}
+
+/// The id a rollout's name ends with: "rollout-2025-08-01T10-00-00-<uuid>.jsonl".
+fn rolloutId(file: []const u8) ?[]const u8 {
+    const stem = std.fs.path.stem(file);
+    if (stem.len < 36) return null;
+    const id = stem[stem.len - 36 ..];
+    for (id, 0..) |ch, i| {
+        const dash = i == 8 or i == 13 or i == 18 or i == 23;
+        if (if (dash) ch != '-' else !std.ascii.isHex(ch)) return null;
+    }
+    return id;
+}
+
+/// The folder an `<environment_context>` block names: `<cwd>…</cwd>`, or before that
+/// "Current working directory: …".
+fn contextCwd(t: []const u8) ?[]const u8 {
+    if (std.mem.find(u8, t, "<cwd>")) |i| {
+        const rest = t[i + 5 ..];
+        if (std.mem.find(u8, rest, "</cwd>")) |j| return u.trim(rest[0..j]);
+    }
+    const label = "Current working directory:";
+    const i = std.mem.find(u8, t, label) orelse return null;
+    const rest = t[i + label.len ..];
+    return u.trim(rest[0 .. std.mem.findScalar(u8, rest, '\n') orelse rest.len]);
+}
+
+/// What the user asked for in a message: the IDE extension puts its context before the request.
+fn codexPrompt(t: []const u8) ?[]const u8 {
+    const mark = "## My request for Codex:";
+    const asked = u.trim(if (std.mem.find(u8, t, mark)) |i| t[i + mark.len ..] else t);
+    return if (realPrompt(asked)) asked else null;
+}
+
+/// One Codex chat from its rollout file, or null for one nothing was asked in (or a sub-agent's).
+/// Its records changed shape over time: first the bare items of the conversation after a line
+/// `{ id, timestamp }`, then each wrapped as `{ timestamp, type, payload }` with a `session_meta`
+/// first; the folder was at first only told to the model, in an `<environment_context>` message.
+fn readRollout(a: Allocator, file: []const u8) !?SessionInfo {
+    const st = try Dir.cwd().statFile(core.io, file, .{});
+    const mtime = st.mtime.nanoseconds;
+    const size = st.size;
+    {
+        cache_mutex.lock();
+        defer cache_mutex.unlock();
+        if (cache.get(file)) |hit| if (hit.mtime == mtime and hit.size == size)
+            return if (hit.info) |i| try i.clone(a) else null;
+    }
+
+    // (the first line carries Codex's whole system prompt)
+    const HEAD = 768 * 1024;
+    const head = try parseLines(a, try readSlice(a, file, 0, @min(HEAD, size)), false);
+    var id: ?[]const u8 = rolloutId(file);
+    var cwd: ?[]const u8 = null;
+    var created: ?i64 = null;
+    var prompt: ?[]const u8 = null;
+    var sub_agent = false;
+    for (head, 0..) |rec, n| {
+        const body = if (u.get(rec, "payload")) |p| (if (p == .object) p else rec) else rec;
+        if (u.isType(rec, "session_meta") or (n == 0 and u.strOf(rec, "type") == null)) {
+            if (u.strOf(body, "id")) |x| if (x.len > 0) {
+                id = x;
+            };
+            if (created == null) if (u.strOf(body, "timestamp")) |ts| if (u.parseDate(ts)) |t| if (t != 0) {
+                created = t;
+            };
+            // a chat an agent started for itself says who did, where the others say "cli", "vscode"…
+            if (u.get(body, "source")) |src| sub_agent = src == .object;
+        }
+        if (cwd == null) if (u.strOf(body, "cwd")) |x| if (x.len > 0) {
+            cwd = x;
+        };
+        if (prompt != null and cwd != null) break;
+        if (u.isType(rec, "event_msg")) {
+            if (prompt == null and u.isType(body, "user_message")) if (u.strOf(body, "message")) |t| {
+                prompt = codexPrompt(t);
+            };
+            continue;
+        }
+        if (!u.isType(body, "message") or !std.mem.eql(u8, u.strOf(body, "role") orelse "", "user")) continue;
+        const content = u.get(body, "content") orelse continue;
+        if (content != .array) continue;
+        for (content.array.items) |c| {
+            const t = u.trim(u.strOf(c, "text") orelse continue);
+            if (std.mem.startsWith(u8, t, "<environment_context>")) {
+                if (cwd == null) cwd = contextCwd(t);
+            } else if (prompt == null) prompt = codexPrompt(t);
+        }
+    }
+
+    var info: ?SessionInfo = null;
+    if (!sub_agent and id != null and cwd != null and pathLike(plainPath(cwd.?)) and prompt != null) {
+        const dir = plainPath(cwd.?);
+        const mtime_ms = st.mtime.toMilliseconds();
+        info = .{
+            .id = id.?,
+            .title = u.takeChars(try u.collapseWs(a, prompt.?), 90),
+            .cwd = dir,
+            .projectCwd = projectRoot(dir),
+            .created = created orelse createdMs(a, file) orelse mtime_ms,
+            .updated = mtime_ms,
+            .cwdExists = core.exists(dir),
+            .agent = "codex",
+        };
+    }
+
+    cache_mutex.lock();
+    defer cache_mutex.unlock();
+    const entry: Cached = .{ .mtime = mtime, .size = size, .info = if (info) |i| try i.clone(core.gpa) else null };
+    errdefer entry.free();
+    const slot = try cache.getOrPut(core.gpa, file);
+    if (slot.found_existing) {
+        slot.value_ptr.free();
+    } else {
+        slot.key_ptr.* = core.gpa.dupe(u8, file) catch |e| {
+            cache.removeByPtr(slot.key_ptr);
+            return e;
+        };
+    }
+    slot.value_ptr.* = entry;
+    return info;
 }
 
 // ---------------- watcher ----------------
@@ -1808,4 +1973,110 @@ test "Codex's chats are listed with Claude's" {
     // a database of another shape is skipped, not an error
     try core.writeFile(try std.fs.path.join(a, &.{ home, "state_6.sqlite" }), "not a database");
     try testing.expectEqual(@as(usize, 0), (try listSessions(a)).len);
+}
+
+test "Codex's chats from before it kept a database" {
+    var store = try TestStore.init();
+    defer store.deinit();
+    const a = store.arena.allocator();
+
+    try testing.expectEqualStrings("0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", rolloutId("C:\\x\\rollout-2025-08-01T10-00-00-0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl").?);
+    try testing.expect(rolloutId("rollout-2025-08-01T10-00-00.jsonl") == null);
+    try testing.expect(rolloutId("rollout-2025-08-01T10-00-00-0198a1b2+c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl") == null);
+    try testing.expectEqualStrings("/home/me/app", contextCwd("<environment_context>\n  <cwd> /home/me/app </cwd>\n  <shell>bash</shell>\n</environment_context>").?);
+    try testing.expectEqualStrings("E:\\repo", contextCwd("<environment_context>\nCurrent working directory: E:\\repo\nApproval policy: never\n</environment_context>").?);
+    try testing.expect(contextCwd("<environment_context></environment_context>") == null);
+    try testing.expect(pathLike(if (core.is_windows) "E:\\softek\\TMS" else "/home/me/app"));
+    try testing.expect(!pathLike("repo") and !pathLike("") and !pathLike(if (core.is_windows) "E:\\a\nApproval policy: <never>" else "/a\nb"));
+    try testing.expectEqualStrings("fix it", codexPrompt("# Context from my IDE setup:\n\n## Open tabs:\n- a.cs\n\n## My request for Codex:\nfix it\n").?);
+    try testing.expectEqualStrings("fix it", codexPrompt("fix it").?);
+    try testing.expect(codexPrompt("<user_instructions>be brief</user_instructions>") == null);
+
+    const home = try codexHome(a);
+    const repo = try std.fs.path.join(a, &.{ std.fs.path.dirname(home).?, "repo" });
+    try core.makePath(repo);
+    const repo_json = try core.toJson(a, repo);
+    const day = try std.fs.path.join(a, &.{ home, "sessions", "2025", "08", "01" });
+    try core.makePath(day);
+    const put = struct {
+        fn put(arena: Allocator, dir: []const u8, id: []const u8, text: []const u8) !void {
+            const name = try std.fmt.allocPrint(arena, "rollout-2025-08-01T10-00-00-{s}.jsonl", .{id});
+            try core.writeFile(try std.fs.path.join(arena, &.{ dir, name }), text);
+        }
+    }.put;
+    // as it is written now: every record wrapped, the folder in the first one
+    try put(a, day, "00000000-0000-7000-8000-000000000001", try std.fmt.allocPrint(a,
+        \\{{"timestamp":"2025-10-02T03:04:05.000Z","type":"session_meta","payload":{{"id":"00000000-0000-7000-8000-000000000001","timestamp":"2025-10-02T03:04:05.000Z","cwd":{s},"originator":"codex_cli_rs","source":"cli"}}}}
+        \\{{"timestamp":"2025-10-02T03:04:06.000Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<environment_context>\n  <cwd>/elsewhere</cwd>\n</environment_context>"}}]}}}}
+        \\{{"timestamp":"2025-10-02T03:04:07.000Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"# Context from my IDE setup:\n\n## My request for Codex:\nsửa   lỗi\nphân trang"}}]}}}}
+        \\{{"timestamp":"2025-10-02T03:04:07.000Z","type":"event_msg","payload":{{"type":"user_message","message":"second question"}}}}
+        \\
+    , .{repo_json}));
+    // as it was at first: bare items, the folder only told to the model
+    try put(a, day, "00000000-0000-7000-8000-000000000002", try std.fmt.allocPrint(a,
+        \\{{"id":"00000000-0000-7000-8000-000000000002","timestamp":"2025-08-01T10:00:00.000Z","instructions":null}}
+        \\{{"record_type":"state"}}
+        \\{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<environment_context>\nCurrent working directory: {s}\nApproval policy: on-request\n</environment_context>"}}]}}
+        \\{{"type":"message","role":"user","content":[{{"type":"input_text","text":"add a test"}}]}}
+        \\{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"done"}}]}}
+        \\
+    , .{repo_json[1 .. repo_json.len - 1]}));
+    // nothing asked, a sub-agent's, no folder: not chats to go back to
+    try put(a, day, "00000000-0000-7000-8000-000000000003", try std.fmt.allocPrint(a,
+        \\{{"timestamp":"2025-10-02T03:04:05.000Z","type":"session_meta","payload":{{"id":"00000000-0000-7000-8000-000000000003","cwd":{s},"source":"cli"}}}}
+        \\
+    , .{repo_json}));
+    try put(a, day, "00000000-0000-7000-8000-000000000004", try std.fmt.allocPrint(a,
+        \\{{"timestamp":"2025-10-02T03:04:05.000Z","type":"session_meta","payload":{{"id":"00000000-0000-7000-8000-000000000004","cwd":{s},"source":{{"subagent":"review"}}}}}}
+        \\{{"timestamp":"2025-10-02T03:04:07.000Z","type":"event_msg","payload":{{"type":"user_message","message":"review this"}}}}
+        \\
+    , .{repo_json}));
+    try put(a, day, "00000000-0000-7000-8000-000000000005",
+        \\{"id":"00000000-0000-7000-8000-000000000005","timestamp":"2025-08-01T10:00:00.000Z"}
+        \\{"type":"message","role":"user","content":[{"type":"input_text","text":"where am I"}]}
+        \\
+    );
+    // other files there are not rollouts
+    try core.writeFile(try std.fs.path.join(a, &.{ day, "rollout-2025-08-01T10-00-00-00000000-0000-7000-8000-000000000006.jsonl.zst" }), "x");
+    try core.writeFile(try std.fs.path.join(a, &.{ day, "notes.jsonl" }), "{}");
+
+    var list = try listSessions(a);
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqualStrings(repo, list[0].cwd);
+    try testing.expectEqual(@as(usize, 2), list[0].sessions.len);
+    const by_id = struct {
+        fn find(sessions: []const SessionInfo, id: []const u8) ?SessionInfo {
+            for (sessions) |x| if (std.mem.eql(u8, x.id, id)) return x;
+            return null;
+        }
+    }.find;
+    const new = by_id(list[0].sessions, "00000000-0000-7000-8000-000000000001").?;
+    try testing.expectEqualStrings("sửa lỗi phân trang", new.title);
+    try testing.expectEqualStrings("codex", new.agent.?);
+    try testing.expectEqual(@as(i64, 1_759_374_245_000), new.created);
+    try testing.expect(new.cwdExists);
+    const old = by_id(list[0].sessions, "00000000-0000-7000-8000-000000000002").?;
+    try testing.expectEqualStrings("add a test", old.title);
+    try testing.expectEqualStrings(repo, old.cwd);
+    try testing.expectEqual(@as(i64, 1_754_042_400_000), old.created);
+    // read once: the second listing comes from the cache
+    try testing.expectEqual(@as(usize, 2), (try listSessions(a))[0].sessions.len);
+
+    // once Codex keeps a database, it speaks for the chats it has: its name for one, another archived
+    const file = try std.fs.path.join(a, &.{ home, "state_5.sqlite" });
+    {
+        var db: ?*sq.sqlite3 = null;
+        defer _ = sq.sqlite3_close(db);
+        try testing.expectEqual(sq.SQLITE_OK, sq.sqlite3_open_v2((try a.dupeSentinel(u8, file, 0)).ptr, &db, sq.SQLITE_OPEN_READWRITE | sq.SQLITE_OPEN_CREATE, null));
+        const sql = try std.fmt.allocPrintSentinel(a,
+            \\CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, title TEXT, name TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER);
+            \\INSERT INTO threads VALUES ('00000000-0000-7000-8000-000000000001', '{s}', 't', 'Fix paging', 1790741406, 1790743003, 0);
+            \\INSERT INTO threads VALUES ('00000000-0000-7000-8000-000000000002', '{s}', 'archived', NULL, 1, 2, 1);
+        , .{ repo, repo }, 0);
+        try testing.expectEqual(sq.SQLITE_OK, sq.sqlite3_exec(db, sql.ptr, null, null, null));
+    }
+    list = try listSessions(a);
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqual(@as(usize, 1), list[0].sessions.len);
+    try testing.expectEqualStrings("Fix paging", list[0].sessions[0].title);
 }
