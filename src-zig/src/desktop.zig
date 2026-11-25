@@ -40,7 +40,8 @@ fn desktop_set(_: *ipc.Call, a: struct { chat: []const u8, on: bool }) !void {
 
 pub const INSTRUCTIONS: []const u8 = "These tools see and operate the other apps open on the user's Windows desktop (the user turned them on for this chat). " ++
     "Start with desktop_list_windows, then desktop_snapshot of one window to get its numbered controls, then desktop_click / desktop_type / desktop_press_key with those numbers as `ref`. " ++
-    "Take a new snapshot after the window changes. For apps whose controls don't show up in a snapshot (games, canvas or some Electron apps), use desktop_screenshot and click by x/y on it. " ++
+    "To be fast: those three already answer with the controls of the window that is in front afterwards (new refs), so do not call desktop_snapshot after them; " ++
+    "and when you know the next steps (click this field, type that, press Enter), send them all in one desktop_batch call instead of one call each. For apps whose controls don't show up in a snapshot (games, canvas or some Electron apps), use desktop_screenshot and click by x/y on it. " ++
     "To open an app, start it from the shell (e.g. `start notepad`), then list the windows. " ++
     "These use the user's real mouse and keyboard and bring the window to the front: ask the user before anything that sends, deletes, buys, pays, submits or changes settings, and never type passwords.";
 
@@ -64,7 +65,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "desktop_click",
-    \\    "description": "Click a control (`ref` from the last desktop_snapshot), or a point (`x`, `y` in pixels of the last desktop_screenshot). Brings its window to the front first.",
+    \\    "description": "Click a control (`ref` from the last desktop_snapshot), or a point (`x`, `y` in pixels of the last desktop_screenshot). Brings its window to the front first. Answers with the controls of the window in front afterwards (a new snapshot, with new refs).",
     \\    "inputSchema": {
     \\      "type": "object",
     \\      "properties": {
@@ -78,7 +79,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "desktop_type",
-    \\    "description": "Type text with the keyboard: into a control (`ref`, clicked first), into a `window` (brought to the front), or else into the window in front. `clear` selects all and deletes first; `submit` presses Enter after.",
+    \\    "description": "Type text with the keyboard: into a control (`ref`, clicked first), into a `window` (brought to the front), or else into the window in front. `clear` selects all and deletes first; `submit` presses Enter after. Answers with a new snapshot of the window in front.",
     \\    "inputSchema": {
     \\      "type": "object",
     \\      "properties": { "text": { "type": "string" }, "ref": { "type": "string" }, "window":
@@ -89,7 +90,7 @@ const tools_json =
     \\  },
     \\  {
     \\    "name": "desktop_press_key",
-    \\    "description": "Press a key or shortcut in the window in front (or in `window`, brought to the front first), e.g. \"Enter\", \"Escape\", \"Tab\", \"Down\", \"Ctrl+S\", \"Alt+F4\", \"Ctrl+Shift+N\".",
+    \\    "description": "Press a key or shortcut in the window in front (or in `window`, brought to the front first), e.g. \"Enter\", \"Escape\", \"Tab\", \"Down\", \"Ctrl+S\", \"Alt+F4\", \"Ctrl+Shift+N\". Answers with a new snapshot of the window in front.",
     \\    "inputSchema": { "type": "object", "properties": { "key": { "type": "string" }, "window":
 ++ window_arg ++
     \\ }, "required": ["key"] }
@@ -107,6 +108,21 @@ const tools_json =
     \\    "inputSchema": { "type": "object", "properties": { "window":
 ++ window_arg ++
     \\ } }
+    \\  },
+    \\  {
+    \\    "name": "desktop_batch",
+    \\    "description": "Several actions in ONE call, run in order: much faster than one call per action. Use it whenever you already know the next steps. Each step takes the arguments of desktop_click ({\"ref\":\"3\"} or {\"x\":10,\"y\":20}), desktop_type ({\"ref\":\"4\",\"text\":\"hello\"}) or desktop_press_key ({\"key\":\"Ctrl+S\"}): a step with `key` is a key press, one with `text` a type, any other a click. Refs are those of the last snapshot and stay valid for the whole batch. Stops at the first step that fails. Answers with each step's result and a new snapshot of the window in front at the end.",
+    \\    "inputSchema": {
+    \\      "type": "object",
+    \\      "properties": { "steps": { "type": "array", "items": { "type": "object", "properties": {
+    \\        "ref": { "type": "string" }, "x": { "type": "number" }, "y": { "type": "number" },
+    \\        "button": { "type": "string", "enum": ["left", "right"] }, "double": { "type": "boolean" },
+    \\        "text": { "type": "string" }, "clear": { "type": "boolean" }, "submit": { "type": "boolean" },
+    \\        "key": { "type": "string" }, "window":
+++ window_arg ++
+    \\ } } } },
+    \\      "required": ["steps"]
+    \\    }
     \\  }
     \\]
 ;
@@ -143,6 +159,9 @@ const IID_IUIAutomationTogglePattern: c.GUID = .{ .Data1 = 0x94cf8058, .Data2 = 
 
 const Element = c.IUIAutomationElement;
 
+/// The properties `describe` reads from the cache: Name, ControlType, IsEnabled, IsOffscreen, IsPassword.
+const CACHED = [_]c.PROPERTYID{ 30005, 30003, 30010, 30022, 30019 };
+
 fn release(el: *Element) void {
     _ = el.lpVtbl.*.Release.?(el);
 }
@@ -155,6 +174,9 @@ const Shot = struct { win: c.HWND, left: i32, top: i32, scale: f64 };
 const Worker = struct {
     uia: *c.IUIAutomation,
     walker: *c.IUIAutomationTreeWalker,
+    /// what a snapshot reads of every control, fetched together with the control itself: one
+    /// call into the other app per control instead of six
+    cache: *c.IUIAutomationCacheRequest,
     /// per chat: the window of the last snapshot and its numbered controls (owned by `core.gpa`)
     snaps: std.StringHashMapUnmanaged(Snap) = .empty,
     /// per chat: where the last screenshot was taken
@@ -169,7 +191,14 @@ const Worker = struct {
             _ = u.lpVtbl.*.Release.?(u);
             return null;
         }
-        return .{ .uia = u, .walker = walker };
+        var cache: [*c]c.IUIAutomationCacheRequest = null;
+        if (com.call(u, "CreateCacheRequest", .{&cache}) < 0 or cache == null) {
+            _ = walker.*.lpVtbl.*.Release.?(walker);
+            _ = u.lpVtbl.*.Release.?(u);
+            return null;
+        }
+        for (CACHED) |id| _ = com.call(cache, "AddProperty", .{id});
+        return .{ .uia = u, .walker = walker, .cache = cache };
     }
 
     fn deinit(w: *Worker) void {
@@ -183,6 +212,7 @@ const Worker = struct {
         var keys = w.shots.keyIterator();
         while (keys.next()) |k| core.gpa.free(k.*);
         w.shots.deinit(core.gpa);
+        _ = w.cache.lpVtbl.*.Release.?(w.cache);
         _ = w.walker.lpVtbl.*.Release.?(w.walker);
         _ = w.uia.lpVtbl.*.Release.?(w.uia);
     }
@@ -332,16 +362,22 @@ fn dispatch(w: *Worker, a: Allocator, chat: []const u8, name: []const u8, args: 
     const eql = std.mem.eql;
     if (eql(u8, name, "desktop_list_windows")) return text(a, try listWindows(a));
     if (eql(u8, name, "desktop_snapshot")) return text(a, try snapshot(w, a, chat, args, fail));
-    if (eql(u8, name, "desktop_click")) return text(a, try click(w, a, chat, args, fail));
-    if (eql(u8, name, "desktop_type")) return text(a, try typeText(w, a, chat, args, fail));
-    if (eql(u8, name, "desktop_press_key")) {
-        if (str(args, "window")) |spec| try focus(a, try findWindow(a, spec, fail), fail);
-        try press(a, str(args, "key") orelse "", fail);
-        return text(a, try after(a));
+    if (eql(u8, name, "desktop_click")) {
+        try click(w, a, chat, args, fail);
+        return text(a, try after(w, a, chat, "Clicked."));
     }
+    if (eql(u8, name, "desktop_type")) {
+        try typeText(w, a, chat, args, fail);
+        return text(a, try after(w, a, chat, "Typed."));
+    }
+    if (eql(u8, name, "desktop_press_key")) {
+        try pressIn(a, args, fail);
+        return text(a, try after(w, a, chat, "Pressed."));
+    }
+    if (eql(u8, name, "desktop_batch")) return text(a, try after(w, a, chat, try batch(w, a, chat, args, fail)));
     if (eql(u8, name, "desktop_focus")) {
         const hwnd = try findWindow(a, str(args, "window") orelse "", fail);
-        try focus(a, hwnd, fail);
+        _ = try focus(a, hwnd, fail);
         return text(a, try std.fmt.allocPrint(a, "\"{s}\" is in front.", .{try title(a, hwnd)}));
     }
     if (eql(u8, name, "desktop_screenshot")) return screenshot(w, a, chat, args, fail);
@@ -479,19 +515,27 @@ fn findWindow(a: Allocator, spec_: []const u8, fail: *core.Fail) !c.HWND {
     return fail.set(a, "No window matches \"{s}\". Call desktop_list_windows.", .{spec});
 }
 
-/// Brings `hwnd` to the front; fails unless that app really is in front afterwards.
-fn focus(a: Allocator, hwnd: c.HWND, fail: *core.Fail) !void {
-    if (c.IsIconic(hwnd) != 0) _ = c.ShowWindow(hwnd, c.SW_RESTORE);
+/// Brings `hwnd` to the front; fails unless that app really is in front afterwards. False when it
+/// already was (nothing moved, nothing to wait for).
+fn focus(a: Allocator, hwnd: c.HWND, fail: *core.Fail) !bool {
+    const minimized = c.IsIconic(hwnd) != 0;
+    if (!minimized and c.GetForegroundWindow() == hwnd) return false;
+    if (minimized) _ = c.ShowWindow(hwnd, c.SW_RESTORE);
     if (c.GetForegroundWindow() != hwnd and c.SetForegroundWindow(hwnd) == 0) {
         // Windows only lets the app that got the last input take the foreground: tap Alt
         var alt = [_]c.INPUT{ key(0x12, 0, 0), key(0x12, 0, c.KEYEVENTF_KEYUP) };
         send(&alt);
         _ = c.SetForegroundWindow(hwnd);
     }
-    core.sleepMs(150);
     // a dialog of the same app may be the one in front: that is where input should go
-    if (!frontIs(pid(hwnd)))
-        return fail.set(a, "Windows would not bring \"{s}\" to the front. Ask the user to click on it once.", .{try title(a, hwnd)});
+    const began = core.monoMs();
+    while (!frontIs(pid(hwnd))) : (core.sleepMs(10)) {
+        if (core.monoMs() -| began >= 500)
+            return fail.set(a, "Windows would not bring \"{s}\" to the front. Ask the user to click on it once.", .{try title(a, hwnd)});
+    }
+    // in front, but not drawn (or back from the taskbar) yet
+    core.sleepMs(if (minimized) 250 else 60);
+    return true;
 }
 
 fn frontIs(pid_: u32) bool {
@@ -504,11 +548,23 @@ fn guardFront(a: Allocator, fail: *core.Fail) !void {
         return fail.set(a, "VIBE CODE is in front, so keys would go into this chat. Pass `window` (or `ref`) so the target app is brought to the front first.", .{});
 }
 
-/// What is in front once an action had a moment to take effect.
-fn after(a: Allocator) ![]u8 {
-    core.sleepMs(400);
+/// How long an app gets to take an action in before its window is read again, and before the
+/// next step of a batch.
+const SETTLE_MS = 200;
+const STEP_MS = 80;
+
+/// What an action answers: `done`, then the window that is in front once the action had a moment
+/// to take effect, read again — so that no desktop_snapshot call has to follow.
+fn after(w: *Worker, a: Allocator, chat: []const u8, done: []const u8) ![]u8 {
+    core.sleepMs(SETTLE_MS);
     const h = c.GetForegroundWindow();
-    return std.fmt.allocPrint(a, "ok — in front: \"{s}\" [{s}]", .{ try title(a, h), try program(a, pid(h)) });
+    if (h != null and pid(h) != c.GetCurrentProcessId()) {
+        var ignored: core.Fail = .{};
+        if (snapshotOf(w, a, chat, h, &ignored)) |snap| {
+            return std.fmt.allocPrint(a, "{s}\n\nIn front now (refs are new):\n{s}", .{ done, snap });
+        } else |_| {}
+    }
+    return std.fmt.allocPrint(a, "{s}\n\nIn front: \"{s}\" [{s}]", .{ done, try title(a, h), try program(a, pid(h)) });
 }
 
 // ---------------- snapshot ----------------
@@ -578,16 +634,16 @@ fn pattern(comptime T: type, el: *Element, id: c_int, iid: *const c.GUID) ?*T {
 
 fn describe(a: Allocator, el: *Element) !Node {
     var yes: c.WINBOOL = 0;
-    if (com.call(el, "get_CurrentIsOffscreen", .{&yes}) >= 0 and yes != 0) return .skip;
+    if (com.call(el, "get_CachedIsOffscreen", .{&yes}) >= 0 and yes != 0) return .skip;
     var ty: c.CONTROLTYPEID = 0;
-    const kind = if (com.call(el, "get_CurrentControlType", .{&ty}) >= 0 and ty >= 50000 and ty - 50000 < TYPES.len) TYPES[@intCast(ty - 50000)] else "element";
+    const kind = if (com.call(el, "get_CachedControlType", .{&ty}) >= 0 and ty >= 50000 and ty - 50000 < TYPES.len) TYPES[@intCast(ty - 50000)] else "element";
     if (oneOf(kind, &.{ "scrollbar", "thumb", "separator" })) return .skip;
     var bstr: c.BSTR = null;
-    const name = try short(a, if (com.call(el, "get_CurrentName", .{&bstr}) >= 0) try bstrText(a, bstr) else "", 100);
+    const name = try short(a, if (com.call(el, "get_CachedName", .{&bstr}) >= 0) try bstrText(a, bstr) else "", 100);
     if (name.len == 0 and oneOf(kind, &.{ "pane", "group", "custom", "text", "element", "window", "image" })) return .through;
     var line: std.ArrayList(u8) = .empty;
     try line.print(a, "{s} \"{s}\"", .{ kind, name });
-    if (oneOf(kind, &.{ "edit", "combobox", "document", "spinner", "slider" }) and !(com.call(el, "get_CurrentIsPassword", .{&yes}) >= 0 and yes != 0)) {
+    if (oneOf(kind, &.{ "edit", "combobox", "document", "spinner", "slider" }) and !(com.call(el, "get_CachedIsPassword", .{&yes}) >= 0 and yes != 0)) {
         if (pattern(c.IUIAutomationValuePattern, el, c.UIA_ValuePatternId, &IID_IUIAutomationValuePattern)) |v| {
             defer _ = v.lpVtbl.*.Release.?(v);
             bstr = null;
@@ -605,14 +661,14 @@ fn describe(a: Allocator, el: *Element) !Node {
             if (com.call(t, "get_CurrentToggleState", .{&state}) >= 0 and state == c.ToggleState_On) try line.appendSlice(a, " (checked)");
         }
     }
-    if (com.call(el, "get_CurrentIsEnabled", .{&yes}) >= 0 and yes == 0) try line.appendSlice(a, " (disabled)");
+    if (com.call(el, "get_CachedIsEnabled", .{&yes}) >= 0 and yes == 0) try line.appendSlice(a, " (disabled)");
     return .{ .show = line.items };
 }
 
 /// `refs` (in `core.gpa`) keeps every control that got a line; the others are let go.
 fn walk(w: *Worker, a: Allocator, el: *Element, depth: usize, refs: *std.ArrayList(*Element), lines: *std.ArrayList([]const u8)) !void {
     var child: [*c]Element = null;
-    if (com.call(w.walker, "GetFirstChildElement", .{ el, &child }) < 0) return;
+    if (com.call(w.walker, "GetFirstChildElementBuildCache", .{ el, w.cache, &child }) < 0) return;
     while (child != null) {
         const cur: *Element = child;
         var kept = false;
@@ -631,12 +687,16 @@ fn walk(w: *Worker, a: Allocator, el: *Element, depth: usize, refs: *std.ArrayLi
             },
         }
         child = null;
-        if (com.call(w.walker, "GetNextSiblingElement", .{ cur, &child }) < 0) child = null;
+        if (com.call(w.walker, "GetNextSiblingElementBuildCache", .{ cur, w.cache, &child }) < 0) child = null;
     }
 }
 
 fn snapshot(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) ![]u8 {
-    const hwnd = try findWindow(a, str(args, "window") orelse "", fail);
+    return snapshotOf(w, a, chat, try findWindow(a, str(args, "window") orelse "", fail), fail);
+}
+
+/// Reads `hwnd`'s controls; they become the chat's refs.
+fn snapshotOf(w: *Worker, a: Allocator, chat: []const u8, hwnd: c.HWND, fail: *core.Fail) ![]u8 {
     const head = try std.fmt.allocPrint(a, "Window id {d} — \"{s}\" [{s}]", .{ windowId(hwnd), try title(a, hwnd), try program(a, pid(hwnd)) });
     if (c.IsIconic(hwnd) != 0) return std.fmt.allocPrint(a, "{s} is minimized: call desktop_focus first.", .{head});
     var root: [*c]Element = null;
@@ -699,7 +759,7 @@ fn clickAt(a: Allocator, x: i32, y: i32, right: bool, double: bool, fail: *core.
 /// Clicks the middle of a control from the last snapshot.
 fn clickRef(w: *Worker, a: Allocator, chat: []const u8, r: Value, right: bool, double: bool, fail: *core.Fail) !void {
     const hwnd, const el = try element(w, a, chat, r, fail);
-    try focus(a, hwnd, fail);
+    _ = try focus(a, hwnd, fail);
     var b: c.RECT = .{};
     const hr = com.call(el, "get_CurrentBoundingRectangle", .{&b});
     if (hr < 0) return fail.set(a, "UI Automation could not find that control (0x{x:0>8}): take a new desktop_snapshot.", .{@as(u32, @bitCast(hr))});
@@ -708,19 +768,60 @@ fn clickRef(w: *Worker, a: Allocator, chat: []const u8, r: Value, right: bool, d
     try clickAt(a, @divTrunc(b.left + b.right, 2), @divTrunc(b.top + b.bottom, 2), right, double, fail);
 }
 
-fn click(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) ![]u8 {
+fn click(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) !void {
     const right = if (str(args, "button")) |b| std.mem.eql(u8, b, "right") else false;
     const double = flag(args, "double");
     if (get(args, "ref")) |r| {
         try clickRef(w, a, chat, r, right, double, fail);
     } else if (number(args, "x") != null and number(args, "y") != null) {
         const shot = w.shots.get(chat) orelse return fail.set(a, "x/y are pixels of a desktop_screenshot: take one first.", .{});
-        if (shot.win != null) try focus(a, shot.win, fail);
+        if (shot.win != null) _ = try focus(a, shot.win, fail);
         try clickAt(a, shot.left + toPixel(number(args, "x").? / shot.scale), shot.top + toPixel(number(args, "y").? / shot.scale), right, double, fail);
     } else {
         return fail.set(a, "Pass `ref` (from desktop_snapshot) or `x` and `y` (on the last desktop_screenshot).", .{});
     }
-    return after(a);
+}
+
+/// desktop_press_key: in `window` if one is named, else in the window in front.
+fn pressIn(a: Allocator, args: Value, fail: *core.Fail) !void {
+    if (str(args, "window")) |spec| _ = try focus(a, try findWindow(a, spec, fail), fail);
+    try press(a, str(args, "key") orelse "", fail);
+}
+
+/// Runs the steps in order until one fails; one line per step run.
+fn batch(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) ![]u8 {
+    const none: []const Value = &.{};
+    const steps = if (get(args, "steps")) |v| (if (v == .array) v.array.items else none) else none;
+    if (steps.len == 0) return fail.set(a, "Pass `steps`: a list of clicks, types and key presses.", .{});
+    var out: std.ArrayList(u8) = .empty;
+    for (steps, 1..) |step, n| {
+        // the app takes one step in before the next
+        if (n > 1) core.sleepMs(STEP_MS);
+        var f: core.Fail = .{};
+        const kind = stepKind(step);
+        const r: anyerror!void = switch (kind) {
+            .press_key => pressIn(a, step, &f),
+            .type => typeText(w, a, chat, step, &f),
+            .click => click(w, a, chat, step, &f),
+        };
+        if (r) |_| {
+            try out.print(a, "{d}. {s}: ok\n", .{ n, @tagName(kind) });
+        } else |e| {
+            try out.print(a, "{d}. {s}: {s}\n", .{ n, @tagName(kind), f.text(e) });
+            if (n < steps.len) try out.print(a, "Stopped there: the {d} step(s) after it were not run.\n", .{steps.len - n});
+            break;
+        }
+    }
+    return @constCast(std.mem.trimEnd(u8, out.items, "\n"));
+}
+
+const StepKind = enum { click, type, press_key };
+
+/// What a desktop_batch step is, from the fields it has.
+fn stepKind(step: Value) StepKind {
+    if (str(step, "key") != null) return .press_key;
+    if (str(step, "text") != null) return .type;
+    return .click;
 }
 
 /// Rounded, and kept inside what an i32 holds (as Rust's `as i32` does).
@@ -729,7 +830,7 @@ fn toPixel(v: f64) i32 {
     return @intFromFloat(std.math.clamp(@round(v), -2147483648.0, 2147483647.0));
 }
 
-fn typeText(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) ![]u8 {
+fn typeText(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core.Fail) !void {
     var clear = flag(args, "clear");
     if (get(args, "ref")) |r| {
         try clickRef(w, a, chat, r, false, false, fail);
@@ -742,7 +843,7 @@ fn typeText(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core
             }
         }
     } else if (str(args, "window")) |spec| {
-        try focus(a, try findWindow(a, spec, fail), fail);
+        _ = try focus(a, try findWindow(a, spec, fail), fail);
     }
     try guardFront(a, fail);
     if (clear) {
@@ -769,7 +870,6 @@ fn typeText(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *core
         core.sleepMs(10);
     }
     if (flag(args, "submit")) try press(a, "Enter", fail);
-    return after(a);
 }
 
 const Vk = struct {
@@ -860,8 +960,7 @@ fn screenshot(w: *Worker, a: Allocator, chat: []const u8, args: Value, fail: *co
     if (std.mem.trim(u8, spec, " \t\r\n").len > 0) {
         win = try findWindow(a, spec, fail);
         // only what is on screen gets captured
-        try focus(a, win, fail);
-        core.sleepMs(150);
+        if (try focus(a, win, fail)) core.sleepMs(150);
         const r = rect(win);
         x = r.left;
         y = r.top;
@@ -949,7 +1048,7 @@ test "the tools are listed" {
     defer arena.deinit();
     const a = arena.allocator();
     const listed = try std.json.parseFromSliceLeaky(Value, a, try tools(a), .{});
-    const names = [_][]const u8{ "desktop_list_windows", "desktop_snapshot", "desktop_click", "desktop_type", "desktop_press_key", "desktop_focus", "desktop_screenshot" };
+    const names = [_][]const u8{ "desktop_list_windows", "desktop_snapshot", "desktop_click", "desktop_type", "desktop_press_key", "desktop_focus", "desktop_screenshot", "desktop_batch" };
     try testing.expectEqual(names.len, listed.array.items.len);
     for (listed.array.items, names) |t, name| {
         try testing.expectEqualStrings(name, t.object.get("name").?.string);
@@ -976,6 +1075,9 @@ test "tool arguments" {
     try testing.expectEqual(8, toPixel(7.5));
     try testing.expectEqual(-8, toPixel(-7.5));
     try testing.expectEqual(2147483647, toPixel(1e300));
+    try testing.expectEqual(StepKind.click, stepKind(args));
+    try testing.expectEqual(StepKind.type, stepKind(try std.json.parseFromSliceLeaky(Value, a, "{\"ref\":\"2\",\"text\":\"\"}", .{})));
+    try testing.expectEqual(StepKind.press_key, stepKind(try std.json.parseFromSliceLeaky(Value, a, "{\"key\":\"Enter\",\"window\":\"Notepad\"}", .{})));
     try testing.expectEqualStrings("[{\"type\":\"text\",\"text\":\"a \\\"b\\\"\"}]", try text(a, "a \"b\""));
 }
 

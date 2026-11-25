@@ -296,25 +296,28 @@ const BROWSER_INSTRUCTIONS = "These tools drive the Web tab of this chat in VIBE
     "Do not navigate to it again or reload it just to look at it — that would wipe what they typed. " ++
     "They are also how you check your own work: after you change the code of a web page or web app, open it here and verify it before saying it works " ++
     "(start its dev server first if it needs one, in the background). Use browser_navigate, with reload: true when the page is already open and does not hot-reload " ++
-    "(if its fields hold input the user typed, ask before reloading), then browser_snapshot and try the changed feature. " ++
+    "(if its fields hold input the user typed, ask before reloading), then try the changed feature. " ++
+    "To be fast: browser_navigate, browser_click and browser_press_key already answer with the page as it is afterwards (new refs included), so do not call browser_snapshot after them; " ++
+    "and when you know the next steps (fill these fields, then press that button), send them all in one browser_batch call instead of one call each. " ++
     "Results list console errors, uncaught exceptions and failed requests of the page: fix those too.";
 
 /// The JSON text of the browser tools array.
 const browser_tools =
     \\[
-    \\{"name":"browser_navigate","description":"Open a URL in this chat's Web tab (the built-in browser the user sees). Waits for the page to load. Do NOT use it to look at the page the user already has open — that throws away what they typed; use browser_snapshot instead. Opening the URL that is already loaded is a no-op unless `reload` is true.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"reload":{"type":"boolean","description":"Reload even if this URL is already open, e.g. to see code you just changed. Loses unsaved form input: if the user typed into the page, ask first."}},"required":["url"]}},
-    \\{"name":"browser_snapshot","description":"Start here. Reads the page that is open in the Web tab right now, exactly as the user left it (no reload): URL, title, visible text, a numbered list of interactive elements with their current values, and the page's console errors and failed requests. Use the numbers as `ref` for browser_click / browser_type. Take a new snapshot after the page changes.","inputSchema":{"type":"object","properties":{}}},
-    \\{"name":"browser_click","description":"Click an element (by `ref` from browser_snapshot, or by CSS `selector`). Waits for a page it opens to load; reports the new URL and any errors the click caused.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"}}}},
-    \\{"name":"browser_type","description":"Set the text of an input, textarea, contenteditable or select (option value or label). `submit` presses Enter afterwards.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["text"]}},
-    \\{"name":"browser_press_key","description":"Press a key in the page, e.g. \"Enter\", \"Escape\", \"Tab\", \"Down\", \"PageDown\", \"a\".","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},
+    \\{"name":"browser_navigate","description":"Open a URL in this chat's Web tab (the built-in browser the user sees). Waits for the page to load and answers with what browser_snapshot would say. Do NOT use it to look at the page the user already has open — that throws away what they typed; use browser_snapshot instead. Opening the URL that is already loaded is a no-op unless `reload` is true.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"reload":{"type":"boolean","description":"Reload even if this URL is already open, e.g. to see code you just changed. Loses unsaved form input: if the user typed into the page, ask first."}},"required":["url"]}},
+    \\{"name":"browser_snapshot","description":"Start here. Reads the page that is open in the Web tab right now, exactly as the user left it (no reload): URL, title, visible text, a numbered list of interactive elements with their current values, and the page's console errors and failed requests. Use the numbers as `ref` for browser_click / browser_type. browser_navigate, browser_click, browser_press_key and browser_batch answer with a new snapshot themselves: no need to call this after them.","inputSchema":{"type":"object","properties":{}}},
+    \\{"name":"browser_click","description":"Click an element (by `ref` from browser_snapshot, or by CSS `selector`). Waits for the page to settle (a page it opens, requests it starts), then answers with the page as it is now (a new snapshot, with new refs) and any errors the click caused.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"}}}},
+    \\{"name":"browser_type","description":"Set the text of an input, textarea, contenteditable or select (option value or label). `submit` presses Enter afterwards (and answers with the page as it is then). To fill several fields, use browser_batch.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["text"]}},
+    \\{"name":"browser_press_key","description":"Press a key in the page, e.g. \"Enter\", \"Escape\", \"Tab\", \"Down\", \"PageDown\", \"a\". Answers with the page as it is afterwards.","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},
     \\{"name":"browser_screenshot","description":"Screenshot of the Web tab as the user sees it.","inputSchema":{"type":"object","properties":{}}},
-    \\{"name":"browser_eval","description":"Run a JavaScript expression in the page and return its (JSON) result. Promises are awaited.","inputSchema":{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}}
+    \\{"name":"browser_eval","description":"Run a JavaScript expression in the page and return its (JSON) result. Promises are awaited.","inputSchema":{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}},
+    \\{"name":"browser_batch","description":"Several actions in ONE call, run in order: much faster than one call per action. Use it whenever you already know the next steps, e.g. fill every field of a form and press its button. Each step is a click ({\"ref\":\"3\"}), a type ({\"ref\":\"4\",\"text\":\"hello\"}, `submit` to press Enter) or a key press ({\"key\":\"Enter\"}). Refs are those of the last snapshot; they stay valid for the whole batch as long as the page is not replaced. Stops at the first step that fails. Answers with each step's result and the page as it is at the end (a new snapshot).","inputSchema":{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["click","type","press_key"],"description":"Optional: a step with `key` is a key press, one with `text` a type, any other a click"},"ref":{"type":"string","description":"Element number from the last snapshot"},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"},"key":{"type":"string"}}}}},"required":["steps"]}}
     \\]
 ;
 
 /// Numbers every visible interactive element (data-vibe-ref) and returns them with the page text.
 const SNAPSHOT_JS =
-    \\(() => {
+    \\((max) => {
     \\  const SEL = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[contenteditable=""],[contenteditable=true],[onclick]'
     \\  document.querySelectorAll('[data-vibe-ref]').forEach((e) => e.removeAttribute('data-vibe-ref'))
     \\  const elements = []
@@ -339,10 +342,14 @@ const SNAPSHOT_JS =
     \\    elements.push(line)
     \\    if (n >= 400) break
     \\  }
-    \\  const text = document.body ? document.body.innerText.replace(/\n{3,}/g, '\n\n').slice(0, 20000) : ''
-    \\  return { title: document.title, url: location.href, elements, text }
-    \\})()
+    \\  const all = document.body ? document.body.innerText.replace(/\n{3,}/g, '\n\n') : ''
+    \\  return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }
+    \\})
 ;
+
+/// How much page text an explicit browser_snapshot gives, and the shorter one that follows an action.
+const SNAPSHOT_FULL = "(20000)";
+const SNAPSHOT_BRIEF = "(8000)";
 
 /// JS expression for the element a call points at: { ref } from the last snapshot, or { selector }.
 fn findJs(a: Allocator, args: Value, fail: *core.Fail) ![]const u8 {
@@ -415,19 +422,96 @@ fn samePage(x: []const u8, y: []const u8) bool {
     return std.mem.eql(u8, norm(x), norm(y));
 }
 
-const PAGE_STATE_JS = "({ url: location.href, title: document.title, ready: document.readyState })";
+/// Run before an action. Puts `window.__vibe` in the page (once per document): it counts the
+/// fetch / XHR requests in flight, notes when the DOM last changed and when the page starts to
+/// leave. Each action starts a new count (`gen`): a request from before it (a long poll) is not
+/// waited for. `(true)` marks the page as leaving (a navigation is about to be asked for).
+const ARM_JS =
+    \\((leave) => {
+    \\  let s = window.__vibe
+    \\  if (!s) {
+    \\    s = window.__vibe = { gen: 0, pending: 0, leaving: 0, changed: 0 }
+    \\    addEventListener('beforeunload', () => { s.leaving = Date.now() })
+    \\    new MutationObserver(() => { s.changed = Date.now() })
+    \\      .observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+    \\    const track = () => {
+    \\      const g = s.gen
+    \\      s.pending++
+    \\      return () => { if (g === s.gen) s.pending-- }
+    \\    }
+    \\    const f = window.fetch
+    \\    if (f) window.fetch = function () {
+    \\      const done = track()
+    \\      try {
+    \\        const p = f.apply(this, arguments)
+    \\        p.then(done, done)
+    \\        return p
+    \\      } catch (e) { done(); throw e }
+    \\    }
+    \\    const send = XMLHttpRequest.prototype.send
+    \\    XMLHttpRequest.prototype.send = function () {
+    \\      const done = track()
+    \\      this.addEventListener('loadend', done, { once: true })
+    \\      try { return send.apply(this, arguments) } catch (e) { this.removeEventListener('loadend', done); done(); throw e }
+    \\    }
+    \\  }
+    \\  s.gen++
+    \\  s.pending = 0
+    \\  s.changed = Date.now()
+    \\  s.leaving = leave ? Date.now() : 0
+    \\  return true
+    \\})
+;
 
-/// Waits (up to `max_ms`) for the document to finish loading; returns its { url, title, ready }.
+/// { url, title, ready, armed, busy }: `busy` while the page is leaving, a request the action
+/// started is in flight, or the DOM changed in the last 120 ms.
+const PAGE_STATE_JS =
+    \\(() => {
+    \\  const s = window.__vibe
+    \\  const busy = !!s && (s.leaving > 0 || s.pending > 0 || Date.now() - s.changed < 120)
+    \\  return { url: location.href, title: document.title, ready: document.readyState, armed: !!s, busy }
+    \\})()
+;
+
+/// A page that is loaded but never goes quiet (animations, polling) is waited for this long.
+const BUSY_MAX_MS = 3_000;
+/// Between two looks at the page. It is asked from here rather than by a timer in the page:
+/// a hidden tab's timers are throttled to one a second, or a minute.
+const POLL_MS = 40;
+
+fn arm(a: Allocator, tab: []const u8, leave: bool) void {
+    var fail: core.Fail = .{};
+    _ = browser.eval(a, tab, if (leave) ARM_JS ++ "(true)" else ARM_JS ++ "(false)", &fail) catch {};
+}
+
+/// Waits (up to `max_ms`) for the page to settle: its document loaded, the requests the action
+/// started answered and its DOM still. Returns as soon as it is — an action that changes nothing
+/// costs about 120 ms. Returns the page's { url, title, ready }.
 fn settle(a: Allocator, tab: []const u8, max_ms: u64) ?Value {
     const began = core.monoMs();
+    var loaded_at: ?u64 = null;
     var last: ?Value = null;
-    while (core.monoMs() -| began < max_ms) {
-        core.sleepMs(250);
+    while (true) : (core.sleepMs(POLL_MS)) {
+        const now = core.monoMs();
+        if (now -| began >= max_ms) break;
         var fail: core.Fail = .{};
+        // fails while one document makes way for the next
         const v = browser.eval(a, tab, PAGE_STATE_JS, &fail) catch continue;
         last = v;
         const url = J.str(J.get(v, "url")) orelse continue;
-        if (std.mem.eql(u8, J.str(J.get(v, "ready")) orelse "", "complete") and !std.mem.eql(u8, url, "about:blank")) break;
+        if (!std.mem.eql(u8, J.str(J.get(v, "ready")) orelse "", "complete") or std.mem.eql(u8, url, "about:blank")) {
+            loaded_at = null;
+            continue;
+        }
+        // a new document: watch it too, it may still be drawing itself
+        if (!(J.boolean(J.get(v, "armed")) orelse false)) {
+            arm(a, tab, false);
+            loaded_at = now;
+            continue;
+        }
+        const since = loaded_at orelse now;
+        loaded_at = since;
+        if (!(J.boolean(J.get(v, "busy")) orelse false) or now -| since >= BUSY_MAX_MS) break;
     }
     return last;
 }
@@ -442,21 +526,87 @@ fn errorsBlock(a: Allocator, e: []const []const u8) ![]const u8 {
     return std.fmt.allocPrint(a, "\n\nConsole errors / failed requests ({d}):\n- {s}", .{ e.len, try std.mem.join(a, "\n- ", e) });
 }
 
-/// After a click / key press: let a page it opens load, then say where we are and what broke.
-fn afterAction(a: Allocator, tab: []const u8, result: []const u8, before: []const u8, since: u64) ![]const u8 {
-    if (!std.mem.eql(u8, result, "ok")) return text(a, result);
-    const now = settle(a, tab, 15_000);
-    const url = J.str(J.get(now, "url")) orelse "";
-    const moved = if (url.len > 0 and !std.mem.eql(u8, url, before))
-        try std.fmt.allocPrint(a, " — now at {s} \"{s}\"", .{ url, J.str(J.get(now, "title")) orelse "" })
-    else
-        "";
-    return text(a, try std.mem.concat(a, u8, &.{ "ok", moved, try errorsNote(a, tab, since) }));
+/// The page as it is now, in the words of browser_snapshot (`size`: SNAPSHOT_FULL or _BRIEF),
+/// with its errors since `since`. This is what an action answers with, so that no
+/// browser_snapshot call has to follow it.
+fn pageNow(a: Allocator, tab: []const u8, comptime size: []const u8, since: ?u64, fail: *core.Fail) ![]const u8 {
+    const s = try browser.eval(a, tab, SNAPSHOT_JS ++ size, fail);
+    return snapshotText(a, s, try errorsNote(a, tab, since));
 }
 
-fn pageUrl(a: Allocator, tab: []const u8) []const u8 {
-    var fail: core.Fail = .{};
-    return J.str(browser.eval(a, tab, "location.href", &fail) catch null) orelse "";
+/// What an action that went well answers: `done`, then the page as it is now.
+fn afterAction(a: Allocator, tab: []const u8, done: []const u8, since: u64) ![]const u8 {
+    var ignored: core.Fail = .{};
+    const page = pageNow(a, tab, SNAPSHOT_BRIEF, since, &ignored) catch
+        return text(a, try std.mem.concat(a, u8, &.{ done, try errorsNote(a, tab, since) }));
+    return text(a, try std.mem.concat(a, u8, &.{ done, "\n\nThe page now (refs are new):\n", page }));
+}
+
+const Action = enum { click, type, press_key };
+
+/// What a browser_batch step is: what it says, or what its fields make it.
+fn actionOf(step: Value) ?Action {
+    if (J.str(J.get(step, "action"))) |name| return std.meta.stringToEnum(Action, name);
+    if (J.str(J.get(step, "key")) != null) return .press_key;
+    if (J.str(J.get(step, "text")) != null) return .type;
+    return .click;
+}
+
+/// One action on the page, waited for. "ok", or what the page said instead (element not found…).
+fn act(a: Allocator, tab: []const u8, action: Action, args: Value, fail: *core.Fail) ![]const u8 {
+    switch (action) {
+        .click => {
+            const js = try clickJs(a, try findJs(a, args, fail));
+            arm(a, tab, false);
+            const r = try valueText(a, try browser.eval(a, tab, js, fail));
+            if (std.mem.eql(u8, r, "ok")) _ = settle(a, tab, 15_000);
+            return r;
+        },
+        .type => {
+            const js = try typeJs(a, try findJs(a, args, fail), J.str(J.get(args, "text")) orelse "");
+            const r = try valueText(a, try browser.eval(a, tab, js, fail));
+            if (!std.mem.eql(u8, r, "ok") or !(J.boolean(J.get(args, "submit")) orelse false)) return r;
+            arm(a, tab, false);
+            try browser.pressKey(a, tab, "Enter", fail);
+            _ = settle(a, tab, 15_000);
+            return r;
+        },
+        .press_key => {
+            const key = J.str(J.get(args, "key")) orelse "";
+            if (key.len == 0) return fail.set(a, "Pass `key`.", .{});
+            arm(a, tab, false);
+            try browser.pressKey(a, tab, key, fail);
+            _ = settle(a, tab, 15_000);
+            return "ok";
+        },
+    }
+}
+
+/// A browser_batch step in a few words, for the list of results.
+fn stepLabel(a: Allocator, action: Action, step: Value) ![]const u8 {
+    if (action == .press_key) return std.fmt.allocPrint(a, "press_key {s}", .{J.str(J.get(step, "key")) orelse ""});
+    const target = if (J.get(step, "ref")) |r| (if (r != .null) try std.fmt.allocPrint(a, "[{s}]", .{try J.display(a, r)}) else "") else "";
+    return std.fmt.allocPrint(a, "{s} {s}", .{ @tagName(action), if (target.len > 0) target else J.str(J.get(step, "selector")) orelse "" });
+}
+
+/// Runs the steps in order until one fails; one line per step run.
+fn runBatch(a: Allocator, tab: []const u8, steps: []const Value) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (steps, 1..) |step, n| {
+        var fail: core.Fail = .{};
+        const action = actionOf(step);
+        const result: []const u8 = if (action) |x|
+            act(a, tab, x, step, &fail) catch |e| fail.text(e)
+        else
+            "Unknown action: use \"click\", \"type\" or \"press_key\".";
+        const label = if (action) |x| try stepLabel(a, x, step) else J.str(J.get(step, "action")) orelse "";
+        try out.appendSlice(a, try std.fmt.allocPrint(a, "{d}. {s}: {s}\n", .{ n, label, result }));
+        if (!std.mem.eql(u8, result, "ok")) {
+            if (n < steps.len) try out.appendSlice(a, try std.fmt.allocPrint(a, "Stopped there: the {d} step(s) after it were not run.\n", .{steps.len - n}));
+            break;
+        }
+    }
+    return std.mem.trimEnd(u8, out.items, "\n");
 }
 
 /// One browser tool → the JSON text of the MCP content array.
@@ -479,39 +629,39 @@ fn callBrowser(a: Allocator, chat: []const u8, name: []const u8, args: Value, fa
         if (!(J.boolean(J.get(args, "reload")) orelse false) and samePage(cur, url))
             return text(a, try std.fmt.allocPrint(a, "Already open: {s} — \"{s}\". Not reloaded, so the user's form input is kept. Use browser_snapshot to read it.", .{ cur, J.str(J.get(here, "title")) orelse "" }));
         _ = std.Uri.parse(url) catch return fail.set(a, "bad URL: {s}", .{url});
+        // the page that is open now is on its way out: do not take it for the one asked for
+        arm(a, tab, true);
         browser.navigate(tab, url);
         const last = settle(a, tab, 30_000);
-        return text(a, try std.fmt.allocPrint(a, "Loaded {s} — \"{s}\"{s}", .{ J.str(J.get(last, "url")) orelse url, J.str(J.get(last, "title")) orelse "", try errorsNote(a, tab, null) }));
+        return afterAction(a, tab, try std.fmt.allocPrint(a, "Loaded {s}", .{J.str(J.get(last, "url")) orelse url}), since);
     }
-    if (is(name, "browser_snapshot")) {
-        const s = try browser.eval(a, tab, SNAPSHOT_JS, fail);
-        return text(a, try snapshotText(a, s, try errorsNote(a, tab, null)));
-    }
+    if (is(name, "browser_snapshot"))
+        return text(a, try pageNow(a, tab, SNAPSHOT_FULL, null, fail));
     if (is(name, "browser_click")) {
-        const before = pageUrl(a, tab);
-        const r = try valueText(a, try browser.eval(a, tab, try clickJs(a, try findJs(a, args, fail)), fail));
-        return afterAction(a, tab, r, before, since);
+        const r = try act(a, tab, .click, args, fail);
+        return if (is(r, "ok")) afterAction(a, tab, "Clicked.", since) else text(a, r);
     }
     if (is(name, "browser_type")) {
-        const js = try typeJs(a, try findJs(a, args, fail), J.str(J.get(args, "text")) orelse "");
-        const r = try valueText(a, try browser.eval(a, tab, js, fail));
+        const r = try act(a, tab, .type, args, fail);
         if (!is(r, "ok") or !(J.boolean(J.get(args, "submit")) orelse false)) return text(a, r);
-        const before = pageUrl(a, tab);
-        try browser.pressKey(a, tab, "Enter", fail);
-        return afterAction(a, tab, r, before, since);
+        return afterAction(a, tab, "Typed and pressed Enter.", since);
     }
     if (is(name, "browser_press_key")) {
-        const before = pageUrl(a, tab);
-        try browser.pressKey(a, tab, J.str(J.get(args, "key")) orelse "", fail);
-        return afterAction(a, tab, "ok", before, since);
+        _ = try act(a, tab, .press_key, args, fail);
+        return afterAction(a, tab, "Pressed.", since);
+    }
+    if (is(name, "browser_batch")) {
+        const steps = J.items(J.get(args, "steps"));
+        if (steps.len == 0) return fail.set(a, "Pass `steps`: a list of clicks, types and key presses.", .{});
+        return afterAction(a, tab, try runBatch(a, tab, steps), since);
     }
     if (is(name, "browser_screenshot")) {
         if (!browser.isVisible(tab))
             return text(a, "The Web tab is hidden (another chat or the Source code tab is in front), so there is nothing to capture.");
-        const r = try browser.cdp(a, tab, "Page.captureScreenshot", "{\"format\":\"png\"}", fail);
+        const r = try browser.cdp(a, tab, "Page.captureScreenshot", "{\"format\":\"jpeg\",\"quality\":80}", fail);
         const data = J.str(J.get(r, "data")) orelse "";
         if (data.len == 0 or !isBase64(a, data)) return text(a, "Could not capture the Web tab.");
-        return std.mem.concat(a, u8, &.{ "[{\"type\":\"image\",\"data\":", try core.toJson(a, data), ",\"mimeType\":\"image/png\"}]" });
+        return std.mem.concat(a, u8, &.{ "[{\"type\":\"image\",\"data\":", try core.toJson(a, data), ",\"mimeType\":\"image/jpeg\"}]" });
     }
     if (is(name, "browser_eval")) {
         const v = try browser.eval(a, tab, J.str(J.get(args, "expression")) orelse "", fail);
@@ -529,11 +679,12 @@ fn snapshotText(a: Allocator, s: Value, errors_note: []const u8) ![]const u8 {
         first = false;
         try elements.appendSlice(a, line);
     };
-    return std.fmt.allocPrint(a, "URL: {s}\nTitle: {s}\n\nInteractive elements:\n{s}\n\nPage text:\n{s}{s}", .{
+    return std.fmt.allocPrint(a, "URL: {s}\nTitle: {s}\n\nInteractive elements:\n{s}\n\nPage text:\n{s}{s}{s}", .{
         J.str(J.get(s, "url")) orelse "",
         J.str(J.get(s, "title")) orelse "",
         if (elements.items.len == 0) "(none)" else elements.items,
         J.str(J.get(s, "text")) orelse "",
+        if (J.boolean(J.get(s, "more")) orelse false) "\n[the page text goes on: cut here]" else "",
         errors_note,
     });
 }
@@ -640,7 +791,7 @@ test "JSON-RPC" {
 
     const list = J.parse(a, (try onPost(a, "mcp", "c", "{\"id\":4,\"method\":\"tools/list\"}")).?).?;
     const tools = J.items(J.path(list, &.{ "result", "tools" }));
-    const names = [_][]const u8{ "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press_key", "browser_screenshot", "browser_eval" };
+    const names = [_][]const u8{ "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press_key", "browser_screenshot", "browser_eval", "browser_batch" };
     try std.testing.expectEqual(names.len, tools.len);
     for (names, tools) |name, tool| {
         try std.testing.expectEqualStrings(name, J.str(J.get(tool, "name")).?);
@@ -674,10 +825,23 @@ test "the scripts the browser tools run" {
     try std.testing.expect(std.mem.find(u8, typed, "\n  el.focus()\n  const text = \"it's \\\"quoted\\\"\\n\"\n  if (el instanceof HTMLInputElement") != null);
     try std.testing.expect(std.mem.endsWith(u8, typed, "  } else return 'That element is not a text field.'\n  return 'ok'\n})()"));
 
-    try std.testing.expect(std.mem.startsWith(u8, SNAPSHOT_JS, "(() => {\n  const SEL = 'a[href],button,"));
+    try std.testing.expect(std.mem.startsWith(u8, SNAPSHOT_JS, "((max) => {\n  const SEL = 'a[href],button,"));
     try std.testing.expect(std.mem.find(u8, SNAPSHOT_JS, ".replace(/\\s+/g, ' ')") != null);
     try std.testing.expect(std.mem.find(u8, SNAPSHOT_JS, "replace(/\\n{3,}/g, '\\n\\n')") != null);
-    try std.testing.expect(std.mem.endsWith(u8, SNAPSHOT_JS, "return { title: document.title, url: location.href, elements, text }\n})()"));
+    try std.testing.expect(std.mem.endsWith(u8, SNAPSHOT_JS, "return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }\n})"));
+    try std.testing.expect(std.mem.startsWith(u8, ARM_JS, "((leave) => {\n  let s = window.__vibe\n"));
+    try std.testing.expect(std.mem.endsWith(u8, ARM_JS, "  return true\n})"));
+    try std.testing.expect(std.mem.find(u8, PAGE_STATE_JS, "Date.now() - s.changed < 120)\n") != null);
+
+    // a batch step is what it says, or what its fields make it
+    try std.testing.expectEqual(@as(?Action, .click), actionOf(J.parse(a, "{\"ref\":\"3\"}").?));
+    try std.testing.expectEqual(@as(?Action, .type), actionOf(J.parse(a, "{\"ref\":\"3\",\"text\":\"\"}").?));
+    try std.testing.expectEqual(@as(?Action, .press_key), actionOf(J.parse(a, "{\"key\":\"Enter\"}").?));
+    try std.testing.expectEqual(@as(?Action, .click), actionOf(J.parse(a, "{\"action\":\"click\",\"text\":\"x\"}").?));
+    try std.testing.expectEqual(@as(?Action, null), actionOf(J.parse(a, "{\"action\":\"hover\"}").?));
+    try std.testing.expectEqualStrings("click [3]", try stepLabel(a, .click, J.parse(a, "{\"ref\":3,\"selector\":\"#x\"}").?));
+    try std.testing.expectEqualStrings("type #x", try stepLabel(a, .type, J.parse(a, "{\"selector\":\"#x\",\"text\":\"t\"}").?));
+    try std.testing.expectEqualStrings("press_key Enter", try stepLabel(a, .press_key, J.parse(a, "{\"key\":\"Enter\"}").?));
 }
 
 test "tool results" {
@@ -702,6 +866,8 @@ test "tool results" {
     const page = J.parse(a, "{\"url\":\"http://x/\",\"title\":\"T\",\"elements\":[\"[1] button \\\"Go\\\"\",\"[2] a \\\"Home\\\" -> /\"],\"text\":\"Hello\"}").?;
     try std.testing.expectEqualStrings("URL: http://x/\nTitle: T\n\nInteractive elements:\n[1] button \"Go\"\n[2] a \"Home\" -> /\n\nPage text:\nHello\n\nE", try snapshotText(a, page, "\n\nE"));
     try std.testing.expectEqualStrings("URL: \nTitle: \n\nInteractive elements:\n(none)\n\nPage text:\n", try snapshotText(a, .null, ""));
+    const long = J.parse(a, "{\"url\":\"u\",\"title\":\"T\",\"elements\":[],\"text\":\"Hello\",\"more\":true}").?;
+    try std.testing.expectEqualStrings("URL: u\nTitle: T\n\nInteractive elements:\n(none)\n\nPage text:\nHello\n[the page text goes on: cut here]", try snapshotText(a, long, ""));
 
     try std.testing.expect(isBase64(a, "aGVsbG8="));
     try std.testing.expect(!isBase64(a, "not base64!"));
@@ -742,7 +908,7 @@ test "the server answers over HTTP" {
     const list = try http.postJson(a, url, &auth, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
     try std.testing.expectEqual(@as(u16, 200), list.status);
     const tools = J.items(J.path(J.parse(a, list.body), &.{ "result", "tools" }));
-    try std.testing.expectEqual(@as(usize, 7), tools.len);
+    try std.testing.expectEqual(@as(usize, 8), tools.len);
     try std.testing.expectEqualStrings("browser_navigate", J.str(J.get(tools[0], "name")).?);
     try std.testing.expectEqualStrings("browser_eval", J.str(J.get(tools[6], "name")).?);
 
