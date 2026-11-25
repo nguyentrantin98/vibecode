@@ -24,11 +24,19 @@ export function SoundMeter(): React.JSX.Element | null {
   const btn = useRef<HTMLButtonElement>(null)
   const t = useT()
 
+  // refreshed every 30 s too, so it appears when headphones that can take the filter are plugged in
   useEffect(() => {
-    window.api.claude.sound?.().then(setInfo, () => {})
+    let live = true
+    const load = (): void => void window.api.claude.sound?.().then((i) => live && setInfo(i), () => {})
+    load()
+    const timer = setInterval(load, 30000)
+    return () => {
+      live = false
+      clearInterval(timer)
+    }
   }, [open])
 
-  if (!info) return null
+  if (!info?.supported) return null
   const preset = PRESETS.find((p) => p.id === info.preset)
   const label = !info.installed || !info.enabled ? 'EQ' : preset ? preset.label(t) : t('Custom', 'Tùy chỉnh')
   return (

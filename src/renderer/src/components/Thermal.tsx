@@ -34,26 +34,33 @@ export function TempMeter(): React.JSX.Element | null {
     }
   }, [open])
 
-  if (info?.celsius == null) return null
-  const c = Math.round(info.celsius)
-  const sev = severity(c)
+  // shown when the machine has something to show: a temperature, or a cooling setting it supports
+  if (!info || (info.celsius == null && !hasCooling(info))) return null
+  const c = info.celsius == null ? null : Math.round(info.celsius)
   return (
     <>
       <button
         ref={btn}
-        className={`usage-meter temp-meter sev-${sev}`}
-        title={t(`Temperature: ${c}°C · click for cooling`, `Nhiệt độ: ${c}°C · bấm để chỉnh làm mát`)}
+        className={`usage-meter temp-meter${c == null ? '' : ` sev-${severity(c)}`}`}
+        title={c == null ? t('Cooling', 'Làm mát') : t(`Temperature: ${c}°C · click for cooling`, `Nhiệt độ: ${c}°C · bấm để chỉnh làm mát`)}
         onClick={() => setOpen((o) => !o)}
       >
-        <Thermometer size={12} />
-        <span className="usage-bar">
-          <span style={{ width: `${Math.min(100, Math.max(0, ((c - 30) / 70) * 100))}%` }} />
-        </span>
-        <span className="usage-pct">{c}°C</span>
+        {c == null ? <Fan size={12} /> : <Thermometer size={12} />}
+        {c != null && (
+          <span className="usage-bar">
+            <span style={{ width: `${Math.min(100, Math.max(0, ((c - 30) / 70) * 100))}%` }} />
+          </span>
+        )}
+        <span className="usage-pct">{c == null ? t('Cooling', 'Làm mát') : `${c}°C`}</span>
       </button>
       {open && <CoolingPanel info={info} onInfo={setInfo} anchor={btn.current} onClose={() => setOpen(false)} />}
     </>
   )
+}
+
+/** the machine can change at least one cooling setting (Windows power plan or ASUS firmware) */
+function hasCooling(i: ThermalInfo): boolean {
+  return i.asus || i.activeCooling !== null || i.turboOff !== null
 }
 
 /** A panel that opens above a status-bar item; closes on a click outside it or Escape. */
@@ -109,7 +116,8 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
       return next
     })
 
-  const c = Math.round(info.celsius ?? 0)
+  const c = info.celsius == null ? null : Math.round(info.celsius)
+  const windows = info.activeCooling !== null || info.turboOff !== null
   const profiles: { id: FanProfile; label: string }[] = [
     { id: 'silent', label: t('Quiet', 'Êm') },
     { id: 'standard', label: t('Standard', 'Tiêu chuẩn') },
@@ -119,16 +127,16 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
 
   return (
     <StatusPopover anchor={anchor} onClose={onClose} width={320}>
-      <div className={`temp-head sev-${severity(c)}`}>
-        <Thermometer size={20} />
+      <div className={`temp-head${c == null ? '' : ` sev-${severity(c)}`}`}>
+        {c == null ? <Fan size={20} /> : <Thermometer size={20} />}
         <div>
-          <div className="temp-big">{c}°C</div>
-          <div className="temp-sub">{verdict(c, t)}</div>
+          <div className="temp-big">{c == null ? t('Cooling', 'Làm mát') : `${c}°C`}</div>
+          <div className="temp-sub">{c == null ? t('No temperature sensor reported', 'Máy không báo nhiệt độ') : verdict(c, t)}</div>
         </div>
-        <button className="btn btn-primary temp-max" disabled={busy !== null} onClick={() => void maxCooling()} title={t('Turbo off, fans first' + (info.asus ? ', fan at 100%' : ''), 'Tắt Turbo, ưu tiên quạt' + (info.asus ? ', quạt 100%' : ''))}>
+        {hasCooling(info) && <button className="btn btn-primary temp-max" disabled={busy !== null} onClick={() => void maxCooling()} title={t('Turbo off, fans first' + (info.asus ? ', fan at 100%' : ''), 'Tắt Turbo, ưu tiên quạt' + (info.asus ? ', quạt 100%' : ''))}>
           {spin('max') ?? <Snowflake size={13} />}
           {t('Max cooling', 'Làm mát tối đa')}
-        </button>
+        </button>}
       </div>
       {info.zones.length > 1 && (
         <div className="temp-zones">
@@ -166,23 +174,27 @@ function CoolingPanel({ info, onInfo, anchor, onClose }: { info: ThermalInfo; on
         </>
       )}
 
-      <div className="menu-sep">{t('Windows cooling', 'Làm mát Windows')}</div>
-      <Toggle
-        on={info.activeCooling === true}
-        disabled={busy !== null || info.activeCooling === null}
-        busy={busy === 'activeCooling'}
-        label={t('Fans first', 'Ưu tiên quạt')}
-        sub={t('Speed up the fans before slowing the CPU', 'Tăng tốc quạt trước khi hạ xung CPU')}
-        onChange={(v) => void setCooling({ activeCooling: v })}
-      />
-      <Toggle
-        on={info.turboOff === true}
-        disabled={busy !== null || info.turboOff === null}
-        busy={busy === 'turboOff'}
-        label={t('Turbo Boost off', 'Tắt Turbo Boost')}
-        sub={t('Much cooler and quieter, slower under heavy load', 'Mát và êm hơn nhiều, chậm hơn khi tải nặng')}
-        onChange={(v) => void setCooling({ turboOff: v })}
-      />
+      {windows && <div className="menu-sep">{t('Windows cooling', 'Làm mát Windows')}</div>}
+      {info.activeCooling !== null && (
+        <Toggle
+          on={info.activeCooling}
+          disabled={busy !== null}
+          busy={busy === 'activeCooling'}
+          label={t('Fans first', 'Ưu tiên quạt')}
+          sub={t('Speed up the fans before slowing the CPU', 'Tăng tốc quạt trước khi hạ xung CPU')}
+          onChange={(v) => void setCooling({ activeCooling: v })}
+        />
+      )}
+      {info.turboOff !== null && (
+        <Toggle
+          on={info.turboOff}
+          disabled={busy !== null}
+          busy={busy === 'turboOff'}
+          label={t('Turbo Boost off', 'Tắt Turbo Boost')}
+          sub={t('Much cooler and quieter, slower under heavy load', 'Mát và êm hơn nhiều, chậm hơn khi tải nặng')}
+          onChange={(v) => void setCooling({ turboOff: v })}
+        />
+      )}
       {error && <div className="temp-error">{error}</div>}
     </StatusPopover>
   )

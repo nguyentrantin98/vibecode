@@ -206,8 +206,16 @@ fn isAsus() bool {
     const len = @min(buf.len, size / 2);
     var ascii: [128]u8 = undefined;
     for (buf[0..len], 0..) |ch, i| ascii[i] = if (ch < 128) std.ascii.toLower(@intCast(ch)) else '?';
-    return std.mem.indexOf(u8, ascii[0..len], "asus") != null;
+    if (std.mem.indexOf(u8, ascii[0..len], "asus") == null) return false;
+    // ASUS desktop boards report the same manufacturer but have no ATK WMI fan control: that comes
+    // with the laptops' ASUS System Control Interface driver
+    var state: u32 = 0;
+    var ssize: u32 = @sizeOf(u32);
+    const atk = std.unicode.utf8ToUtf16LeStringLiteral("SYSTEM\\CurrentControlSet\\Services\\ATKWMIACPIIO");
+    return RegGetValueW(HKEY_LOCAL_MACHINE, atk, std.unicode.utf8ToUtf16LeStringLiteral("Start"), RRF_RT_REG_DWORD, null, &state, &ssize) == 0;
 }
+
+const RRF_RT_REG_DWORD: u32 = 0x10;
 
 const FanState = struct {
     fanProfile: ?[]const u8 = null,

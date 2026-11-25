@@ -36,6 +36,9 @@ const State = struct {
 };
 
 const Status = struct {
+    /// a connected speaker / headphones can take the equalizer (no effects of its own), or it is
+    /// already installed: the status bar hides Sound otherwise
+    supported: bool,
     /// the APO is registered with Windows
     installed: bool,
     /// it processed sound in the last few seconds (status.txt is fresh)
@@ -104,6 +107,89 @@ fn installed() bool {
     return RegGetValueW(HKEY_LOCAL_MACHINE, key, null, RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, null, &buf, &size) == 0;
 }
 
+extern "advapi32" fn RegOpenKeyExW(key: usize, sub_key: [*:0]const u16, options: u32, sam: u32, result: *usize) callconv(.winapi) i32;
+extern "advapi32" fn RegEnumKeyExW(key: usize, index: u32, name: [*]u16, name_len: *u32, reserved: ?*u32, class: ?[*]u16, class_len: ?*u32, time: ?*anyopaque) callconv(.winapi) i32;
+extern "advapi32" fn RegEnumValueW(key: usize, index: u32, name: [*]u16, name_len: *u32, reserved: ?*u32, kind: ?*u32, data: ?*anyopaque, data_len: ?*u32) callconv(.winapi) i32;
+extern "advapi32" fn RegCloseKey(key: usize) callconv(.winapi) i32;
+const KEY_READ: u32 = 0x20019;
+const KEY_WOW64_64KEY: u32 = 0x0100;
+const RRF_RT_REG_DWORD: u32 = 0x10;
+const DEVICE_STATE_ACTIVE: u32 = 1;
+/// the upper bits of DeviceState are flags of their own
+const DEVICE_STATEMASK: u32 = 0xF;
+
+/// True when a connected playback device is one eq_apo.ps1 would install on: it has an
+/// FxProperties key without the driver's own effect chain (PKEY_FX_* ,1 ,7 ,13 ,14 ,15) or someone
+/// else's post-mix effect (,2). Reading these keys needs no admin.
+fn usableDevice() bool {
+    if (!core.is_windows) return false;
+    const L = std.unicode.utf8ToUtf16LeStringLiteral;
+    var render: usize = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\Render"), 0, KEY_READ | KEY_WOW64_64KEY, &render) != 0) return false;
+    defer _ = RegCloseKey(render);
+    const sub = L("\\FxProperties");
+    var i: u32 = 0;
+    while (true) : (i += 1) {
+        // room for "<endpoint guid>\FxProperties" and the terminating 0
+        var path: [64 + sub.len + 1]u16 = undefined;
+        var len: u32 = 64;
+        if (RegEnumKeyExW(render, i, &path, &len, null, null, null, null) != 0) return false;
+        path[len] = 0;
+        var state: u32 = 0;
+        var size: u32 = @sizeOf(u32);
+        if (RegGetValueW(render, @ptrCast(&path), L("DeviceState"), RRF_RT_REG_DWORD, null, &state, &size) != 0 or state & DEVICE_STATEMASK != DEVICE_STATE_ACTIVE) continue;
+        @memcpy(path[len..][0..sub.len], sub);
+        path[len + sub.len] = 0;
+        var fx: usize = 0;
+        if (RegOpenKeyExW(render, @ptrCast(&path), 0, KEY_READ | KEY_WOW64_64KEY, &fx) != 0) continue;
+        defer _ = RegCloseKey(fx);
+        if (!hasDriverEffects(fx)) return true;
+    }
+}
+
+fn hasDriverEffects(fx: usize) bool {
+    const prefix = "{d04e05a6-594b-4fb6-a80d-01af5eed7d1d},";
+    var j: u32 = 0;
+    while (true) : (j += 1) {
+        var vname: [128]u16 = undefined;
+        var vlen: u32 = vname.len;
+        var data: [128]u16 = undefined;
+        var dlen: u32 = @sizeOf(@TypeOf(data));
+        const r = RegEnumValueW(fx, j, &vname, &vlen, null, null, &data, &dlen);
+        if (r == ERROR_MORE_DATA) {
+            // a long value (not one of the CLSIDs looked at here): enumerate it again by name only
+            vlen = vname.len;
+            dlen = 0;
+            if (RegEnumValueW(fx, j, &vname, &vlen, null, null, null, null) != 0) return false;
+        } else if (r != 0) return false;
+        const n = lowerAscii(vname[0..vlen]);
+        if (!std.mem.startsWith(u8, n.slice(), prefix)) continue;
+        const pid = n.slice()[prefix.len..];
+        // the post-mix slot already holding this equalizer is fine
+        if (std.mem.eql(u8, pid, "2")) {
+            const v = lowerAscii(data[0..@min(data.len, dlen / 2)]);
+            if (std.mem.eql(u8, std.mem.trimEnd(u8, v.slice(), &.{0}), "{a1c947fd-c3da-4823-b683-41c0ba386b75}")) continue;
+        }
+        for ([_][]const u8{ "1", "2", "7", "13", "14", "15" }) |id| if (std.mem.eql(u8, pid, id)) return true;
+    }
+}
+
+const ERROR_MORE_DATA: i32 = 234;
+
+const Ascii = struct {
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+    fn slice(s: *const Ascii) []const u8 {
+        return s.buf[0..s.len];
+    }
+};
+
+fn lowerAscii(w: []const u16) Ascii {
+    var out: Ascii = .{ .len = @min(w.len, 128) };
+    for (w[0..out.len], 0..) |ch, k| out.buf[k] = if (ch < 128) std.ascii.toLower(@intCast(ch)) else '?';
+    return out;
+}
+
 /// status.txt is rewritten every 2.5 s while the APO has a stream open
 fn running(a: Allocator) bool {
     const dir = dataDir(a) catch return false;
@@ -118,6 +204,7 @@ fn status(a: Allocator) Status {
     const s = loadState(a);
     const on = installed();
     return .{
+        .supported = on or usableDevice(),
         .installed = on,
         .running = on and running(a),
         .devices = s.devices,

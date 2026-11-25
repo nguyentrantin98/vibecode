@@ -161,6 +161,8 @@ export interface ThermalInfo {
 
 /** System-wide equalizer: VIBE CODE's own audio filter (src-zig/apo, src-zig/src/audio.zig) */
 export interface SoundInfo {
+  /** a connected speaker / headphones can take the filter, or it is installed; Sound is hidden otherwise */
+  supported: boolean
   /** the filter is in Windows' audio chain */
   installed: boolean
   /** it processed sound in the last few seconds */
