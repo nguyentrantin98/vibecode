@@ -364,7 +364,15 @@ export async function openSession(s: SessionInfo): Promise<void> {
     window.alert(tr(`The folder for this chat no longer exists:\n${s.cwd}`, `Thư mục của chat này không còn tồn tại:\n${s.cwd}`))
     return
   }
+  const agent = s.agent && s.agent !== 'claude' ? s.agent : undefined
+  if (agent && !installedAgents().includes(agent)) {
+    const a = agentDef(agent)
+    window.alert(tr(`${a.label} is not installed on this machine:\n${a.install}`, `Chưa cài ${a.label} trên máy này:\n${a.install}`))
+    return
+  }
   if (!st().root || !samePath(st().root!, s.projectCwd)) await openFolder(s.projectCwd, { autoChat: false })
+  // another agent's chat: that agent picks it back up by its id (`codex resume <id>`)
+  if (agent) return newChat({ cwd: s.cwd, agent, args: ['resume', s.id], title: s.title, sessionId: s.id, pinnedTitle: true })
   newChat({ cwd: s.cwd, args: ['--resume', s.id], title: s.title, sessionId: s.id, pinnedTitle: true })
 }
 
@@ -495,7 +503,7 @@ export function newChat(opts: NewChatOpts = {}): void {
   if (!sessionId && args.includes('--continue')) {
     const last = st()
       .projects.flatMap((g) => g.sessions)
-      .filter((s) => samePath(s.cwd, cwd))
+      .filter((s) => !s.agent && samePath(s.cwd, cwd))
       .sort((a, b) => b.updated - a.updated)[0]
     if (last) {
       sessionId = last.id
@@ -561,6 +569,8 @@ function newAgentChat(cwd: string, agentId: AgentId, opts: NewChatOpts, blank: b
     attention: false,
     createdAt: Date.now(),
     agent: agentId,
+    // set when the chat was opened from the agent's own history: the sidebar matches it by this id
+    sessionId: opts.sessionId,
     claudeArgs: args,
     permissionMode
   }
@@ -813,7 +823,9 @@ export function restartChat(id: string): void {
   settled.delete(id)
   if (agentDef(c.agent).id !== 'claude') {
     // other agents: pick their last conversation back up where they can, else start fresh
-    restartTerm(id, { claudeArgs: [...agentDef(c.agent).resume, ...agentFlags(c.agent, c.permissionMode)] })
+    // (a chat opened from the agent's history goes back to that conversation, not to the last one)
+    const resume = c.agent === 'codex' && c.sessionId ? ['resume', c.sessionId] : agentDef(c.agent).resume
+    restartTerm(id, { claudeArgs: [...resume, ...agentFlags(c.agent, c.permissionMode)] })
     return
   }
   // a chat that never got past startup has nothing to resume: start that same session fresh

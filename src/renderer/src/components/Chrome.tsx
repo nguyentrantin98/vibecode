@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { basename, useStore, type SidebarView } from '../store'
 import { defaultAgent, installedAgents, openBrowser, openFile, openFolder, openSession, setDefaultAgent, toggleBottom, toggleTheme } from '../actions'
-import { agentDef } from '../../../shared/agents'
+import { AGENTS, agentDef } from '../../../shared/agents'
 import { languageOf } from '../fileModelsLite'
 import { FileIcon, Logo } from './icons'
 import type { UsageLimit } from '../../../shared/types'
@@ -741,7 +741,13 @@ export function QuickOpen(): React.JSX.Element {
 
 export function Welcome(): React.JSX.Element {
   const claude = useStore((s) => s.claude)
+  useStore((s) => s.agents)
+  useStore((s) => s.preferredAgent)
+  const agents = installedAgents()
+  const agent = defaultAgent()
   const projects = useStore((s) => s.projects)
+  // whose history the list below shows
+  const sources = ['Claude', ...AGENTS.filter((a) => projects.some((g) => g.sessions.some((s) => s.agent === a.id))).map((a) => a.label)].join(' · ')
   const byRecent = [...projects].sort((a, b) => b.updated - a.updated)
   const totalChats = projects.reduce((n, g) => n + g.sessions.length, 0)
   const t = useT()
@@ -758,19 +764,30 @@ export function Welcome(): React.JSX.Element {
           </h1>
           <p className="welcome-sub">
             {t(
-              'A home for Claude Code. Parallel chats, a real editor, and every change one click away.',
-              'Ngôi nhà cho Claude Code. Nhiều chat song song, một trình soạn thảo thực thụ, mọi thay đổi chỉ cách một cú bấm.'
+              'A home for Claude Code, Codex and other coding agents. Parallel chats, a real editor, and every change one click away.',
+              'Ngôi nhà cho Claude Code, Codex và các coding agent khác. Nhiều chat song song, một trình soạn thảo thực thụ, mọi thay đổi chỉ cách một cú bấm.'
             )}
           </p>
+          {agents.length > 1 && (
+            <div className="welcome-agents" title={t('New chats start with this agent', 'Chat mới sẽ bắt đầu với agent này')}>
+              <span className="welcome-agents-label">{t('Chat with', 'Chat với')}</span>
+              {agents.map((id) => (
+                <button key={id} className={`welcome-agent${id === agent ? ' on' : ''}`} onClick={() => setDefaultAgent(id)}>
+                  {id === agent && <Check size={12} />} {agentDef(id).label}
+                </button>
+              ))}
+            </div>
+          )}
           <button className="btn btn-primary btn-lg" onClick={() => openFolder()}>
             <FolderOpen size={17} /> {t('Open a project folder', 'Mở thư mục dự án')}
           </button>
-          {claude && !claude.found && (
+          {/* another agent alone is enough to chat: only a PC with none is told what to install */}
+          {claude && agents.length === 0 && (
             <p className="welcome-warn">
               <CircleAlert size={14} />{' '}
               {t(
-                "Claude Code CLI was not found on this machine. You'll get install steps after opening a folder.",
-                'Không tìm thấy Claude Code CLI trên máy này. Hướng dẫn cài đặt sẽ hiện sau khi bạn mở một thư mục.'
+                "No coding agent (Claude Code, Codex…) was found on this machine. You'll get install steps after opening a folder.",
+                'Không tìm thấy coding agent nào (Claude Code, Codex…) trên máy này. Hướng dẫn cài đặt sẽ hiện sau khi bạn mở một thư mục.'
               )}
             </p>
           )}
@@ -780,7 +797,7 @@ export function Welcome(): React.JSX.Element {
           <div className="claude-projects">
             <div className="cp-head">
               <span className="cp-title">
-                <Link2 size={13} /> {t('From Claude', 'Từ Claude')}
+                <Link2 size={13} /> {t(`From ${sources}`, `Từ ${sources}`)}
               </span>
               <span className="cp-sub">
                 {t(`${projects.length} projects · ${totalChats} chats`, `${projects.length} dự án · ${totalChats} chat`)}
@@ -799,6 +816,7 @@ export function Welcome(): React.JSX.Element {
                     <button key={s.id} className="cp-sess" onClick={() => openSession(s)} title={t(`Resume: ${s.title}`, `Tiếp tục: ${s.title}`)}>
                       <MessagesSquare size={12} />
                       <span className="cp-sess-title">{s.title}</span>
+                      {s.agent && <span className="sess-agent">{agentDef(s.agent).label}</span>}
                       <span className="cp-sess-time">{ago(s.updated, t)}</span>
                     </button>
                   ))}

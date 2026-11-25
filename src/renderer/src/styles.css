@@ -2783,6 +2783,40 @@ button.sb-item.sb-update:hover {
   line-height: 1.6;
   font-size: 14px;
 }
+.welcome-agents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: -10px 0 22px;
+}
+.welcome-agents-label {
+  margin-right: 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.welcome-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+.welcome-agent:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.welcome-agent.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .welcome-warn {
   display: flex;
   align-items: center;
@@ -3214,6 +3248,15 @@ button.sb-item.sb-update:hover {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.sess-agent {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--text-faint);
 }
 .sess-time {
   flex: none;

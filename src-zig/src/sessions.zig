@@ -16,6 +16,7 @@ const m = @import("modules.zig");
 const u = @import("sessions_util.zig");
 const context = @import("sessions_context.zig");
 const log = @import("sessions_log.zig");
+const sq = @import("sqlite");
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
 const Value = u.Value;
@@ -42,6 +43,8 @@ pub const SessionInfo = struct {
     created: i64,
     updated: i64,
     cwdExists: bool,
+    /// the coding agent whose chat this is, when it is not Claude Code: "codex" (a literal, not owned)
+    agent: ?[]const u8 = null,
 
     fn clone(s: SessionInfo, a: Allocator) !SessionInfo {
         var c = s;
@@ -485,6 +488,10 @@ fn listSessions(a: Allocator) ![]const ProjectGroup {
         readers.run();
         for (threads) |t| if (t) |th| th.join();
     }
+    // Codex's chats go under the same projects
+    if (codexDb(a)) |db| {
+        if (codexSessions(a, db)) |list| try readers.found.appendSlice(a, list) else |_| {}
+    }
     const all = readers.found.items;
     // newest first, so a group takes its folder spelling from its latest session
     std.mem.sort(SessionInfo, all, {}, newerFirst);
@@ -530,6 +537,104 @@ fn listSessions(a: Allocator) ![]const ProjectGroup {
         }
     }.lt);
     return list;
+}
+
+// ---------------- Codex's chats ----------------
+
+/// Codex's folder: `$CODEX_HOME`, else `~/.codex`.
+fn codexHome(a: Allocator) ![]const u8 {
+    // tests: next to their own store
+    if (builtin.is_test) return std.fs.path.join(a, &.{ std.fs.path.dirname(test_root orelse return error.NoStore) orelse return error.NoStore, "codex" });
+    if (core.getenv("CODEX_HOME")) |h| if (h.len > 0) return a.dupe(u8, h);
+    return std.fs.path.join(a, &.{ core.home(), ".codex" });
+}
+
+/// `<n>` of "state_<n>.sqlite".
+fn stateVersion(name: []const u8) ?u32 {
+    const head = "state_";
+    const tail = ".sqlite";
+    if (!std.mem.startsWith(u8, name, head) or !std.mem.endsWith(u8, name, tail) or name.len <= head.len + tail.len) return null;
+    return std.fmt.parseInt(u32, name[head.len .. name.len - tail.len], 10) catch null;
+}
+
+/// Codex (the CLI, its desktop app and its IDE extension share it) keeps its conversations in
+/// `state_<n>.sqlite`, table `threads`; `<n>` grows with its schema. The newest one, or null
+/// where Codex was never used.
+fn codexDb(a: Allocator) ?[]const u8 {
+    const home = codexHome(a) catch return null;
+    var dir = Dir.cwd().openDir(core.io, home, .{ .iterate = true }) catch return null;
+    defer dir.close(core.io);
+    var best: ?u32 = null;
+    var it = dir.iterate();
+    while (it.next(core.io) catch null) |e| {
+        const n = stateVersion(e.name) orelse continue;
+        if (best == null or n > best.?) best = n;
+    }
+    const name = std.fmt.allocPrint(a, "state_{d}.sqlite", .{best orelse return null}) catch return null;
+    return std.fs.path.join(a, &.{ home, name }) catch null;
+}
+
+fn columnText(a: Allocator, stmt: ?*sq.sqlite3_stmt, col: c_int) ![]const u8 {
+    const p = sq.sqlite3_column_text(stmt, col);
+    if (p == null) return "";
+    const n: usize = @intCast(sq.sqlite3_column_bytes(stmt, col));
+    const text = p[0..n];
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidUtf8;
+    return a.dupe(u8, text);
+}
+
+/// Codex writes Windows folders as `\\?\E:\repo`.
+fn plainPath(p: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, p, "\\\\?\\") and !std.mem.startsWith(u8, p, "\\\\?\\UNC\\")) p[4..] else p;
+}
+
+/// Codex's timestamps are seconds; newer columns are milliseconds.
+fn toMs(t: i64) i64 {
+    return if (t > 0 and t < 100_000_000_000) t * 1000 else t;
+}
+
+/// The conversations in Codex's database that are not archived, as sessions of the agent "codex"
+/// (`codex resume <id>` picks one back up). Read-only: Codex may have the file open.
+fn codexSessions(a: Allocator, db_path: []const u8) ![]const SessionInfo {
+    var db: ?*sq.sqlite3 = null;
+    defer _ = sq.sqlite3_close(db);
+    if (sq.sqlite3_open_v2((try a.dupeSentinel(u8, db_path, 0)).ptr, &db, sq.SQLITE_OPEN_READONLY | sq.SQLITE_OPEN_NOMUTEX, null) != sq.SQLITE_OK) return error.Sqlite;
+    _ = sq.sqlite3_busy_timeout(db, 500);
+    // `name` (what Codex or the user called the chat) came with a later schema than `title`
+    const queries = [_][*:0]const u8{
+        "SELECT id, cwd, COALESCE(NULLIF(name, ''), title), created_at, updated_at FROM threads WHERE archived = 0",
+        "SELECT id, cwd, title, created_at, updated_at FROM threads WHERE archived = 0",
+    };
+    var stmt: ?*sq.sqlite3_stmt = null;
+    for (queries) |sql| {
+        if (sq.sqlite3_prepare_v2(db, sql, -1, &stmt, null) == sq.SQLITE_OK) break;
+        stmt = null;
+    }
+    if (stmt == null) return error.Sqlite;
+    defer _ = sq.sqlite3_finalize(stmt);
+    var out: std.ArrayList(SessionInfo) = .empty;
+    while (true) {
+        const rc = sq.sqlite3_step(stmt);
+        if (rc == sq.SQLITE_DONE) break;
+        if (rc != sq.SQLITE_ROW) return error.Sqlite;
+        const id = columnText(a, stmt, 0) catch continue;
+        const cwd = plainPath(columnText(a, stmt, 1) catch continue);
+        if (id.len == 0 or cwd.len == 0) continue;
+        // one line, like the titles of Claude's chats
+        var lines = std.mem.tokenizeAny(u8, columnText(a, stmt, 2) catch "", "\r\n");
+        const first = std.mem.trim(u8, lines.next() orelse "", " \t");
+        try out.append(a, .{
+            .id = id,
+            .title = if (first.len > 0) first else "Codex chat",
+            .cwd = cwd,
+            .projectCwd = projectRoot(cwd),
+            .created = toMs(sq.sqlite3_column_int64(stmt, 3)),
+            .updated = toMs(sq.sqlite3_column_int64(stmt, 4)),
+            .cwdExists = core.exists(cwd),
+            .agent = "codex",
+        });
+    }
+    return out.items;
 }
 
 // ---------------- watcher ----------------
@@ -1346,7 +1451,7 @@ test "session list: titles, groups and the cache" {
     try testing.expectEqual(@as(i64, 1_735_787_045_000), s1.created);
     try testing.expectEqual(@as(i64, 1_735_787_100_000), s1.updated);
     try testing.expectEqualStrings(
-        try std.fmt.allocPrint(a, "{{\"id\":\"s1\",\"title\":\"fix the bug\",\"cwd\":{s},\"projectCwd\":{s},\"created\":1735787045000,\"updated\":1735787100000,\"cwdExists\":false}}", .{ repo_json, repo_json }),
+        try std.fmt.allocPrint(a, "{{\"id\":\"s1\",\"title\":\"fix the bug\",\"cwd\":{s},\"projectCwd\":{s},\"created\":1735787045000,\"updated\":1735787100000,\"cwdExists\":false,\"agent\":null}}", .{ repo_json, repo_json }),
         try core.toJson(a, s1),
     );
 
@@ -1637,4 +1742,70 @@ test "delete a session" {
     try testing.expect(!core.exists(try t.path(&.{ "p1", "abc-1" })));
     try testing.expect(core.exists(other));
     try testing.expect(!try deleteSession(a, "abc-1"));
+}
+
+test "Codex's chats are listed with Claude's" {
+    var store = try TestStore.init();
+    defer store.deinit();
+    const a = store.arena.allocator();
+
+    try testing.expectEqual(@as(?u32, 5), stateVersion("state_5.sqlite"));
+    try testing.expectEqual(@as(?u32, 12), stateVersion("state_12.sqlite"));
+    for ([_][]const u8{ "state_5.sqlite-wal", "state_.sqlite", "state_x.sqlite", "logs_2.sqlite", "state_5" }) |name|
+        try testing.expectEqual(@as(?u32, null), stateVersion(name));
+    try testing.expectEqualStrings("E:\\repo", plainPath("\\\\?\\E:\\repo"));
+    try testing.expectEqualStrings("\\\\?\\UNC\\pc\\share", plainPath("\\\\?\\UNC\\pc\\share"));
+    try testing.expectEqualStrings("/home/me/repo", plainPath("/home/me/repo"));
+    try testing.expectEqual(@as(i64, 1_790_741_406_000), toMs(1_790_741_406));
+    try testing.expectEqual(@as(i64, 1_790_741_406_123), toMs(1_790_741_406_123));
+
+    // no Codex here: only Claude's (none)
+    try testing.expect(codexDb(a) == null);
+    try testing.expectEqual(@as(usize, 0), (try listSessions(a)).len);
+
+    const home = try codexHome(a);
+    try core.makePath(home);
+    const repo = try std.fs.path.join(a, &.{ std.fs.path.dirname(home).?, "repo" });
+    try core.makePath(repo);
+    // an older schema's file is left alone once a newer one is there
+    try core.writeFile(try std.fs.path.join(a, &.{ home, "state_4.sqlite" }), "");
+    const file = try std.fs.path.join(a, &.{ home, "state_5.sqlite" });
+    {
+        var db: ?*sq.sqlite3 = null;
+        defer _ = sq.sqlite3_close(db);
+        try testing.expectEqual(sq.SQLITE_OK, sq.sqlite3_open_v2((try a.dupeSentinel(u8, file, 0)).ptr, &db, sq.SQLITE_OPEN_READWRITE | sq.SQLITE_OPEN_CREATE, null));
+        const sql = try std.fmt.allocPrintSentinel(a,
+            \\CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, title TEXT, name TEXT, created_at INTEGER, updated_at INTEGER, archived INTEGER);
+            \\INSERT INTO threads VALUES ('t-new', '{s}', 'sửa lỗi phân trang' || char(10) || 'dòng hai', 'Fix paging', 1790741406, 1790743003, 0);
+            \\INSERT INTO threads VALUES ('t-old', '{s}', '  first words  ', NULL, 1776832286, 1776832300, 0);
+            \\INSERT INTO threads VALUES ('t-gone', 'Q:\\no\\such\\folder', '', '', 1776832286, 1776832290, 0);
+            \\INSERT INTO threads VALUES ('t-archived', '{s}', 'archived', NULL, 1, 2, 1);
+        , .{ repo, repo, repo }, 0);
+        try testing.expectEqual(sq.SQLITE_OK, sq.sqlite3_exec(db, sql.ptr, null, null, null));
+    }
+    try testing.expectEqualStrings(file, codexDb(a).?);
+
+    const list = try listSessions(a);
+    try testing.expectEqual(@as(usize, 2), list.len);
+    const g = for (list) |x| {
+        if (std.mem.eql(u8, x.cwd, repo)) break x;
+    } else return error.NoRepoGroup;
+    try testing.expectEqualStrings("repo", g.name);
+    try testing.expectEqual(@as(usize, 2), g.sessions.len);
+    try testing.expectEqualStrings("t-new", g.sessions[0].id);
+    try testing.expectEqualStrings("Fix paging", g.sessions[0].title);
+    try testing.expectEqualStrings("codex", g.sessions[0].agent.?);
+    try testing.expectEqual(@as(i64, 1_790_743_003_000), g.sessions[0].updated);
+    try testing.expect(g.sessions[0].cwdExists);
+    try testing.expectEqualStrings("first words", g.sessions[1].title);
+    const gone = for (list) |x| {
+        if (!std.mem.eql(u8, x.cwd, repo)) break x;
+    } else return error.NoOtherGroup;
+    try testing.expectEqualStrings("Codex chat", gone.sessions[0].title);
+    try testing.expect(!gone.sessions[0].cwdExists);
+    try testing.expect(std.mem.find(u8, try core.toJson(a, g.sessions[0]), "\"agent\":\"codex\"") != null);
+
+    // a database of another shape is skipped, not an error
+    try core.writeFile(try std.fs.path.join(a, &.{ home, "state_6.sqlite" }), "not a database");
+    try testing.expectEqual(@as(usize, 0), (try listSessions(a)).len);
 }

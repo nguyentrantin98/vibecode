@@ -77,6 +77,8 @@ export interface SessionInfo {
   created: number
   updated: number
   cwdExists: boolean
+  /** the coding agent whose chat this is, when it is not Claude Code (Codex's own history) */
+  agent?: AgentId | null
 }
 
 export interface ProjectGroup {
@@ -187,7 +189,10 @@ export interface ClaudeApiKey {
 
 export interface AgentInfo {
   id: AgentId
+  /** on PATH, and really that agent */
   found: boolean
+  /** on PATH, but another program of the same name (its `--version` says so): cannot chat */
+  wrong?: boolean
 }
 
 export interface ClaudeInfo {

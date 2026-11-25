@@ -214,7 +214,8 @@ function ProjectsTree(): React.JSX.Element {
   // their transcript (only after the first message; a missed file event could delay it further).
   const slashKey = (p: string): string => normKey(p).replace(/\//g, '\\')
   const known = useMemo(() => new Set(projects.flatMap((g) => g.sessions.map((s) => s.id))), [projects])
-  const agentChats = chats.filter((c) => agentDef(c.agent).id !== 'claude' || (!!c.sessionId && !known.has(c.sessionId)))
+  // (an agent's chat opened from its history is listed there already)
+  const agentChats = chats.filter((c) => (agentDef(c.agent).id !== 'claude' ? !c.sessionId || !known.has(c.sessionId) : !!c.sessionId && !known.has(c.sessionId)))
   const allProjects: ProjectGroup[] = [...projects]
   for (const c of agentChats) {
     if (allProjects.some((g) => slashKey(g.key) === slashKey(c.cwd))) continue
@@ -373,6 +374,7 @@ const SessRow = memo(function SessRow(props: { s: SessionInfo; active: boolean; 
     >
       {status ? <StatusDot status={status} attention={attention} /> : <span className="sess-bullet" />}
       <ChatTitle place="tree" chatId={liveId} title={pinned ?? s.title} />
+      {s.agent && <span className="sess-agent">{agentDef(s.agent).label}</span>}
       <span className="sess-time"><Ago t={s.updated} /></span>
     </div>
   )
@@ -410,7 +412,8 @@ export function chatMenu(e: React.MouseEvent, ref: { chatId?: string; session?: 
     !!sessionId && { label: tr('Copy session ID', 'Sao chép ID phiên'), icon: <Copy size={14} />, action: () => navigator.clipboard.writeText(sessionId) },
     !!cwd && { label: tr('Open folder in File Explorer', 'Mở thư mục trong File Explorer'), icon: <FolderOpen size={14} />, action: () => window.api.fs.openPath(cwd) },
     'sep',
-    {
+    // another agent's history is its own to keep: only Claude's transcripts are deleted from here
+    !(s?.agent && !chat) && {
       label: tr('Delete chat…', 'Xoá chat…'),
       icon: <Trash2 size={14} />,
       hint: tr('to Recycle Bin', 'vào Thùng rác'),
@@ -426,7 +429,7 @@ export function chatMenu(e: React.MouseEvent, ref: { chatId?: string; session?: 
           await new Promise((r) => setTimeout(r, 800))
         }
         // a chat that never sent a message has no saved history
-        const saved = !!sessionId && useStore.getState().projects.some((g) => g.sessions.some((x) => x.id === sessionId))
+        const saved = !!sessionId && useStore.getState().projects.some((g) => g.sessions.some((x) => x.id === sessionId && !x.agent))
         if (saved) await window.api.sessions.remove(sessionId).catch((err) => window.alert(String(err)))
         loadSessions()
       }
