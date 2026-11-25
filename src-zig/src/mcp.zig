@@ -297,8 +297,9 @@ const BROWSER_INSTRUCTIONS = "These tools drive the Web tab of this chat in VIBE
     "They are also how you check your own work: after you change the code of a web page or web app, open it here and verify it before saying it works " ++
     "(start its dev server first if it needs one, in the background). Use browser_navigate, with reload: true when the page is already open and does not hot-reload " ++
     "(if its fields hold input the user typed, ask before reloading), then try the changed feature. " ++
-    "To be fast: browser_navigate, browser_click and browser_press_key already answer with the page as it is afterwards (new refs included), so do not call browser_snapshot after them; " ++
-    "and when you know the next steps (fill these fields, then press that button), send them all in one browser_batch call instead of one call each. " ++
+    "To be fast (work like a person, not one call per keystroke): to fill a form use ONE browser_fill call with every field (found by its label, no snapshot needed first; `pick` chooses from the list an autocomplete opens); " ++
+    "browser_navigate, browser_click and browser_press_key already answer with what changed on the page, so do not call browser_snapshot after them (an element keeps its ref number for as long as it is on the page); " ++
+    "when you know the next steps, send them all in one browser_batch call instead of one call each; a click or type whose element is not there yet waits for it (2.5 s), so do not add waits. " ++
     "Results list console errors, uncaught exceptions and failed requests of the page: fix those too.";
 
 /// The JSON text of the browser tools array.
@@ -306,50 +307,85 @@ const browser_tools =
     \\[
     \\{"name":"browser_navigate","description":"Open a URL in this chat's Web tab (the built-in browser the user sees). Waits for the page to load and answers with what browser_snapshot would say. Do NOT use it to look at the page the user already has open — that throws away what they typed; use browser_snapshot instead. Opening the URL that is already loaded is a no-op unless `reload` is true.","inputSchema":{"type":"object","properties":{"url":{"type":"string"},"reload":{"type":"boolean","description":"Reload even if this URL is already open, e.g. to see code you just changed. Loses unsaved form input: if the user typed into the page, ask first."}},"required":["url"]}},
     \\{"name":"browser_snapshot","description":"Start here. Reads the page that is open in the Web tab right now, exactly as the user left it (no reload): URL, title, visible text, a numbered list of interactive elements with their current values, and the page's console errors and failed requests. Use the numbers as `ref` for browser_click / browser_type. browser_navigate, browser_click, browser_press_key and browser_batch answer with a new snapshot themselves: no need to call this after them.","inputSchema":{"type":"object","properties":{}}},
-    \\{"name":"browser_click","description":"Click an element (by `ref` from browser_snapshot, or by CSS `selector`). Waits for the page to settle (a page it opens, requests it starts), then answers with the page as it is now (a new snapshot, with new refs) and any errors the click caused.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"}}}},
-    \\{"name":"browser_type","description":"Set the text of an input, textarea, contenteditable or select (option value or label). `submit` presses Enter afterwards (and answers with the page as it is then). To fill several fields, use browser_batch.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["text"]}},
+    \\{"name":"browser_click","description":"Click an element (by `ref` from browser_snapshot, or by CSS `selector`). A CSS selector takes the first visible match, and an element that is not there yet is waited for (2.5 s). Waits for the page to settle (a page it opens, requests it starts), then answers with what changed on the page (new or changed elements and new text; refs keep their numbers) and any errors the click caused.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"}}}},
+    \\{"name":"browser_type","description":"Set the text of an input, textarea, contenteditable or select (option value or label). `submit` presses Enter afterwards (and answers with the page as it is then). To fill several fields, use browser_fill.","inputSchema":{"type":"object","properties":{"ref":{"type":"string","description":"Element number from the last browser_snapshot, e.g. \"12\""},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"}},"required":["text"]}},
     \\{"name":"browser_press_key","description":"Press a key in the page, e.g. \"Enter\", \"Escape\", \"Tab\", \"Down\", \"PageDown\", \"a\". Answers with the page as it is afterwards.","inputSchema":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},
     \\{"name":"browser_screenshot","description":"Screenshot of the Web tab as the user sees it.","inputSchema":{"type":"object","properties":{}}},
     \\{"name":"browser_eval","description":"Run a JavaScript expression in the page and return its (JSON) result. Promises are awaited.","inputSchema":{"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"]}},
-    \\{"name":"browser_batch","description":"Several actions in ONE call, run in order: much faster than one call per action. Use it whenever you already know the next steps, e.g. fill every field of a form and press its button. Each step is a click ({\"ref\":\"3\"}), a type ({\"ref\":\"4\",\"text\":\"hello\"}, `submit` to press Enter) or a key press ({\"key\":\"Enter\"}). Refs are those of the last snapshot; they stay valid for the whole batch as long as the page is not replaced. Stops at the first step that fails. Answers with each step's result and the page as it is at the end (a new snapshot).","inputSchema":{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["click","type","press_key"],"description":"Optional: a step with `key` is a key press, one with `text` a type, any other a click"},"ref":{"type":"string","description":"Element number from the last snapshot"},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"},"key":{"type":"string"}}}}},"required":["steps"]}}
+    \\{"name":"browser_batch","description":"Several actions in ONE call, run in order: much faster than one call per action. Use it whenever you already know the next steps, e.g. fill every field of a form and press its button. Each step is a click ({\"ref\":\"3\"}), a type ({\"ref\":\"4\",\"text\":\"hello\"}, `submit` to press Enter) or a key press ({\"key\":\"Enter\"}). Refs are those of the last snapshot; they stay valid for the whole batch as long as the page is not replaced. Stops at the first step that fails. Answers with each step's result and what changed on the page.","inputSchema":{"type":"object","properties":{"steps":{"type":"array","items":{"type":"object","properties":{"action":{"type":"string","enum":["click","type","press_key"],"description":"Optional: a step with `key` is a key press, one with `text` a type, any other a click"},"ref":{"type":"string","description":"Element number from the last snapshot"},"selector":{"type":"string","description":"CSS selector, used when no ref is given"},"text":{"type":"string"},"submit":{"type":"boolean"},"key":{"type":"string"}}}}},"required":["steps"]}},
+    \\{"name":"browser_fill","description":"Fill a whole form in ONE call, the fastest way to enter data. Each field is found by `label` (the text shown next to it, or its placeholder / name / aria-label), or by `ref` or `selector`, and given `value`. For an autocomplete / search field also pass `pick`: the text of the option to choose from the list that opens once the value is typed (or true for the first option). Selects take the option's value or label. No snapshot is needed first. A field that cannot be filled is reported and the others are still filled. Does not press Save / Submit. Answers with one line per field (the value it holds afterwards) and what changed on the page.","inputSchema":{"type":"object","properties":{"fields":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string","description":"Text shown next to the field, or its placeholder / name / aria-label"},"ref":{"type":"string","description":"Element number from the last snapshot"},"selector":{"type":"string","description":"CSS selector"},"value":{"type":"string","description":"Text to enter (for an autocomplete: the text to search for)"},"pick":{"description":"Autocomplete only: text of the option to choose (best: its exact text), or true for the first one","type":["string","boolean"]}}}}},"required":["fields"]}}
     \\]
 ;
 
 /// Numbers every visible interactive element (data-vibe-ref) and returns them with the page text.
+/// An element keeps its number for as long as it is on the page. With `diff`, and a look at the
+/// same URL before, only what is new since that look comes back: the elements that are new or
+/// read differently, and the lines of text that were not there.
 const SNAPSHOT_JS =
-    \\((max) => {
+    \\((max, diff) => {
     \\  const SEL = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=tab],[role=menuitem],[role=option],[role=switch],[contenteditable=""],[contenteditable=true],[onclick]'
-    \\  document.querySelectorAll('[data-vibe-ref]').forEach((e) => e.removeAttribute('data-vibe-ref'))
+    \\  const prev = window.__vibeSnap
+    \\  const lines = new Map()
     \\  const elements = []
-    \\  let n = 0
+    \\  const fresh = []
+    \\  // numbers this document did not give (a page restored from a copy of its HTML) mean nothing
+    \\  if (window.__vibeRef == null) document.querySelectorAll('[data-vibe-ref]').forEach((e) => e.removeAttribute('data-vibe-ref'))
+    \\  let n = window.__vibeRef || 0
     \\  for (const el of document.querySelectorAll(SEL)) {
     \\    const r = el.getBoundingClientRect()
-    \\    if (r.width === 0 && r.height === 0) continue
-    \\    const cs = getComputedStyle(el)
-    \\    if (cs.visibility === 'hidden' || cs.display === 'none') continue
-    \\    el.setAttribute('data-vibe-ref', String(++n))
+    \\    const cs = r.width === 0 && r.height === 0 ? null : getComputedStyle(el)
+    \\    if (!cs || cs.visibility === 'hidden' || cs.display === 'none') {
+    \\      if (el.hasAttribute('data-vibe-ref')) el.removeAttribute('data-vibe-ref')
+    \\      continue
+    \\    }
+    \\    let ref = el.getAttribute('data-vibe-ref')
+    \\    // none yet, or a copy of a numbered element
+    \\    if (!ref || lines.has(ref)) {
+    \\      ref = String(++n)
+    \\      el.setAttribute('data-vibe-ref', ref)
+    \\    }
     \\    const tag = el.tagName.toLowerCase()
     \\    const kind = el.getAttribute('role') || (tag === 'input' ? 'input[' + (el.type || 'text') + ']' : tag)
     \\    const label = (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || el.name || '')
     \\      .replace(/\s+/g, ' ').trim().slice(0, 80)
-    \\    let line = '[' + n + '] ' + kind + ' "' + label + '"'
+    \\    let line = '[' + ref + '] ' + kind + ' "' + label + '"'
     \\    if (tag === 'a') line += ' -> ' + (el.getAttribute('href') || '').slice(0, 120)
     \\    if (tag === 'input' || tag === 'textarea') {
     \\      if (el.type !== 'checkbox' && el.type !== 'radio' && el.type !== 'password' && el.value) line += ' value="' + String(el.value).slice(0, 120) + '"'
     \\    } else if (tag === 'select' && el.selectedIndex >= 0) line += ' selected="' + (el.options[el.selectedIndex].text || '').trim().slice(0, 80) + '"'
     \\    if (el.disabled) line += ' (disabled)'
     \\    if (el.checked) line += ' (checked)'
+    \\    lines.set(ref, line)
     \\    elements.push(line)
-    \\    if (n >= 400) break
+    \\    if (!prev || prev.lines.get(ref) !== line) fresh.push(line)
+    \\    if (elements.length >= 400) break
     \\  }
+    \\  window.__vibeRef = n
     \\  const all = document.body ? document.body.innerText.replace(/\n{3,}/g, '\n\n') : ''
-    \\  return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }
+    \\  const rows = all.split('\n').map((t) => t.trim()).filter(Boolean)
+    \\  window.__vibeSnap = { url: location.href, lines, text: new Set(rows) }
+    \\  if (!diff || !prev || prev.url !== location.href)
+    \\    return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }
+    \\  let gone = 0
+    \\  for (const k of prev.lines.keys()) if (!lines.has(k)) gone++
+    \\  const added = rows.filter((t) => !prev.text.has(t)).join('\n')
+    \\  return { title: document.title, url: location.href, diff: true, elements: fresh, same: elements.length - fresh.length, gone, text: added.slice(0, max), more: added.length > max }
     \\})
 ;
 
-/// How much page text an explicit browser_snapshot gives, and the shorter one that follows an action.
-const SNAPSHOT_FULL = "(20000)";
-const SNAPSHOT_BRIEF = "(8000)";
+/// How much page text an explicit browser_snapshot gives (the whole page), and what follows an
+/// action (only what changed, when the page was looked at before).
+const SNAPSHOT_FULL = "(20000, false)";
+const SNAPSHOT_BRIEF = "(6000, true)";
+
+/// The first visible element a CSS selector matches (else the first one): a page often keeps
+/// hidden copies of what it shows (other tabs, closed popups).
+const VISIBLE_JS =
+    \\((s) => { const l = document.querySelectorAll(s); for (const e of l) { const r = e.getBoundingClientRect(); if (r.width > 0 || r.height > 0) return e } return l[0] || null })
+;
+
+/// What a click or type answers when its element is not on the page (yet): asked again for 2.5 s.
+const NOT_FOUND = "Element not found";
 
 /// JS expression for the element a call points at: { ref } from the last snapshot, or { selector }.
 fn findJs(a: Allocator, args: Value, fail: *core.Fail) ![]const u8 {
@@ -359,14 +395,14 @@ fn findJs(a: Allocator, args: Value, fail: *core.Fail) ![]const u8 {
         return std.mem.concat(a, u8, &.{ "document.querySelector('[data-vibe-ref=\"' + ", quoted, " + '\"]')" });
     };
     if (J.str(J.get(args, "selector"))) |s|
-        return std.mem.concat(a, u8, &.{ "document.querySelector(", try core.toJson(a, s), ")" });
+        return std.mem.concat(a, u8, &.{ VISIBLE_JS, "(", try core.toJson(a, s), ")" });
     return fail.set(a, "Pass `ref` (from browser_snapshot) or `selector`.", .{});
 }
 
 fn clickJs(a: Allocator, find: []const u8) ![]const u8 {
     return std.mem.concat(a, u8, &.{ "(() => {\n  const el = ", find,
         \\
-        \\  if (!el) return 'Element not found. Take a new browser_snapshot: refs change when the page changes.'
+        \\  if (!el) return 'Element not found (waited 2.5 s). Take a new browser_snapshot, or check the selector.'
         \\  el.scrollIntoView({ block: 'center', inline: 'center' })
         \\  if (el.focus) el.focus()
         \\  const o = { bubbles: true, cancelable: true, view: window }
@@ -382,7 +418,7 @@ fn clickJs(a: Allocator, find: []const u8) ![]const u8 {
 fn typeJs(a: Allocator, find: []const u8, value: []const u8) ![]const u8 {
     return std.mem.concat(a, u8, &.{ "(() => {\n  const el = ", find,
         \\
-        \\  if (!el) return 'Element not found. Take a new browser_snapshot: refs change when the page changes.'
+        \\  if (!el) return 'Element not found (waited 2.5 s). Take a new browser_snapshot, or check the selector.'
         \\  el.scrollIntoView({ block: 'center' })
         \\  el.focus()
     , "\n  const text = ", try core.toJson(a, value),
@@ -406,6 +442,131 @@ fn typeJs(a: Allocator, find: []const u8, value: []const u8) ![]const u8 {
         \\})()
     });
 }
+
+/// browser_fill: every field of a form in one call. Puts `window.__vibeFill` in the page (once
+/// per document). `begin(field)` finds the field (by its ref, a selector or the label a person
+/// reads next to it) and sets its value the way browser_type does: { missing } when it is not
+/// there, { done: line } when that is all, { wait } when an option has to be picked from the list
+/// the field opens (autocomplete). `poll()` is then asked until it says { done: line }. The
+/// waiting is done from here, between two calls: a hidden tab's timers are throttled.
+const FILL_JS =
+    \\(() => {
+    \\  if (window.__vibeFill) return true
+    \\  const shown = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 || r.height > 0 }
+    \\  const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase()
+    \\  const brief = (e) => e.innerText.replace(/\s+/g, ' ').trim().slice(0, 80)
+    \\  const mouse = (e) => {
+    \\    const o = { bubbles: true, cancelable: true, view: window }
+    \\    e.dispatchEvent(new PointerEvent('pointerdown', o)); e.dispatchEvent(new MouseEvent('mousedown', o))
+    \\    e.dispatchEvent(new PointerEvent('pointerup', o)); e.dispatchEvent(new MouseEvent('mouseup', o))
+    \\    e.click()
+    \\  }
+    \\  const FIELD = 'input:not([type=hidden]),textarea,select,[contenteditable=""],[contenteditable=true]'
+    \\  const ROWS = 'tbody tr,li,[role=option],[role=row],[role=menuitem],.dropdown-item,.ag-row'
+    \\  const byLabel = (label) => {
+    \\    const want = norm(label)
+    \\    const all = [...document.querySelectorAll(FIELD)].filter(shown)
+    \\    const own = all.find((e) => [e.getAttribute('aria-label'), e.placeholder, e.name, e.id, e.title].some((x) => x && norm(x) === want))
+    \\    if (own) return own
+    \\    for (const l of document.querySelectorAll('label')) {
+    \\      if (norm(l.innerText).replace(/[\s:*]+$/, '') !== want || !shown(l)) continue
+    \\      const c = l.control || l.querySelector(FIELD)
+    \\      if (c) return c
+    \\    }
+    \\    // the text a person reads: the field is the first one after it
+    \\    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    \\    for (let t; (t = w.nextNode()); ) {
+    \\      if (norm(t.nodeValue).replace(/[\s:*]+$/, '') !== want || !t.parentElement || !shown(t.parentElement)) continue
+    \\      const next = all.find((e) => t.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)
+    \\      if (next) return next
+    \\    }
+    \\    return null
+    \\  }
+    \\  const visible = (s) => { const l = document.querySelectorAll(s); for (const e of l) if (shown(e)) return e; return l[0] || null }
+    \\  const find = (f) => {
+    \\    try {
+    \\      if (f.ref != null && f.ref !== '') return document.querySelector('[data-vibe-ref="' + f.ref + '"]')
+    \\      if (f.selector) return visible(f.selector)
+    \\      if (f.label) return byLabel(f.label)
+    \\    } catch (e) {}
+    \\    return null
+    \\  }
+    \\  const setValue = (el, text) => {
+    \\    if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    \\      const on = !/^(|0|false|no|off)$/i.test(text.trim())
+    \\      if (el.checked !== on) el.click()
+    \\    } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    \\      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    \\      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, text)
+    \\      el.dispatchEvent(new Event('input', { bubbles: true }))
+    \\      el.dispatchEvent(new Event('change', { bubbles: true }))
+    \\    } else if (el instanceof HTMLSelectElement) {
+    \\      const opt = [...el.options].find((o) => o.value === text || o.text.trim() === text)
+    \\      if (!opt) return 'no option "' + text + '" in this select'
+    \\      el.value = opt.value
+    \\      el.dispatchEvent(new Event('input', { bubbles: true }))
+    \\      el.dispatchEvent(new Event('change', { bubbles: true }))
+    \\    } else if (el.isContentEditable) {
+    \\      document.execCommand('selectAll')
+    \\      document.execCommand('insertText', false, text)
+    \\    } else return 'not a field that takes text'
+    \\    return ''
+    \\  }
+    \\  // the pick that is being waited for
+    \\  let st = null
+    \\  const begin = (f) => {
+    \\    st = null
+    \\    const name = f.label || f.selector || '[' + f.ref + ']'
+    \\    const el = find(f)
+    \\    if (!el) return { missing: true }
+    \\    el.scrollIntoView({ block: 'center' })
+    \\    const pick = f.pick === true || (typeof f.pick === 'string' && f.pick !== '') ? f.pick : null
+    \\    const before = pick === null ? null : new Set([...document.querySelectorAll(ROWS)].filter(shown))
+    \\    if (el.focus) el.focus()
+    \\    if (pick !== null) mouse(el)
+    \\    const typed = f.value != null && f.value !== ''
+    \\    if (f.value != null) {
+    \\      const bad = setValue(el, String(f.value))
+    \\      if (bad) return { done: name + ': ' + bad }
+    \\    }
+    \\    if (pick === null) return { done: name + ': ' + (el.type === 'password' ? 'ok' : JSON.stringify(el.value == null ? String(f.value) : el.value)) }
+    \\    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
+    \\    // the list is first shown unfiltered, then as the search answers: an option reading
+    \\    // exactly `pick` is taken at once, any other only when the list has stopped changing
+    \\    const want = pick === true ? '' : norm(pick)
+    \\    st = { name, el, pick, want, before, calm: !typed ? 250 : want ? 600 : 1200, sig: '', since: Date.now(), start: Date.now(), clicked: 0, chosen: '' }
+    \\    return { wait: true }
+    \\  }
+    \\  const poll = () => {
+    \\    const s = st
+    \\    if (!s) return { done: 'nothing is being picked' }
+    \\    const now = Date.now()
+    \\    if (s.clicked) {
+    \\      // the field takes the option's text a moment after the click
+    \\      if (now - s.clicked < 100) return { wait: true }
+    \\      st = null
+    \\      return { done: s.name + ': ' + JSON.stringify(s.el.value || '') + ' (picked "' + s.chosen + '")' }
+    \\    }
+    \\    const rows = [...document.querySelectorAll(ROWS)].filter((r) => shown(r) && !s.before.has(r) && norm(r.innerText))
+    \\    let row = s.want ? rows.find((r) => norm(r.innerText) === s.want || [...r.children].some((c) => norm(c.innerText) === s.want)) || null : null
+    \\    const sig = rows.length + '|' + (rows[0] ? rows[0].innerText : '')
+    \\    if (sig !== s.sig) { s.sig = sig; s.since = now }
+    \\    const calm = rows.length > 0 && now - s.since >= s.calm
+    \\    if (!row && calm) row = s.want ? rows.find((r) => norm(r.innerText).includes(s.want)) || null : rows[0]
+    \\    if (row) {
+    \\      s.chosen = brief(row)
+    \\      mouse(row.querySelector('td,[role=gridcell],.ag-cell') || row)
+    \\      s.clicked = Date.now()
+    \\      return { wait: true }
+    \\    }
+    \\    if (!calm && now - s.start < 6000) return { wait: true }
+    \\    st = null
+    \\    return { done: s.name + ': ' + (rows.length ? 'no option "' + s.pick + '" among the ' + rows.length + ' listed (first: "' + brief(rows[0]) + '")' : 'no list of options opened') }
+    \\  }
+    \\  window.__vibeFill = { begin, poll }
+    \\  return true
+    \\})()
+;
 
 /// MCP content with one text block (JSON text).
 fn text(a: Allocator, t: []const u8) ![]const u8 {
@@ -539,7 +700,7 @@ fn afterAction(a: Allocator, tab: []const u8, done: []const u8, since: u64) ![]c
     var ignored: core.Fail = .{};
     const page = pageNow(a, tab, SNAPSHOT_BRIEF, since, &ignored) catch
         return text(a, try std.mem.concat(a, u8, &.{ done, try errorsNote(a, tab, since) }));
-    return text(a, try std.mem.concat(a, u8, &.{ done, "\n\nThe page now (refs are new):\n", page }));
+    return text(a, try std.mem.concat(a, u8, &.{ done, "\n\nThe page now:\n", page }));
 }
 
 const Action = enum { click, type, press_key };
@@ -558,13 +719,13 @@ fn act(a: Allocator, tab: []const u8, action: Action, args: Value, fail: *core.F
         .click => {
             const js = try clickJs(a, try findJs(a, args, fail));
             arm(a, tab, false);
-            const r = try valueText(a, try browser.eval(a, tab, js, fail));
+            const r = try evalFound(a, tab, js, fail);
             if (std.mem.eql(u8, r, "ok")) _ = settle(a, tab, 15_000);
             return r;
         },
         .type => {
             const js = try typeJs(a, try findJs(a, args, fail), J.str(J.get(args, "text")) orelse "");
-            const r = try valueText(a, try browser.eval(a, tab, js, fail));
+            const r = try evalFound(a, tab, js, fail);
             if (!std.mem.eql(u8, r, "ok") or !(J.boolean(J.get(args, "submit")) orelse false)) return r;
             arm(a, tab, false);
             try browser.pressKey(a, tab, "Enter", fail);
@@ -580,6 +741,45 @@ fn act(a: Allocator, tab: []const u8, action: Action, args: Value, fail: *core.F
             return "ok";
         },
     }
+}
+
+/// Runs a click / type script; while it says its element is not there, asks again (for 2.5 s):
+/// a list that a request is filling, a popup that is opening.
+fn evalFound(a: Allocator, tab: []const u8, js: []const u8, fail: *core.Fail) ![]const u8 {
+    const began = core.monoMs();
+    while (true) {
+        const r = try valueText(a, try browser.eval(a, tab, js, fail));
+        if (!std.mem.startsWith(u8, r, NOT_FOUND) or core.monoMs() -| began >= 2_500) return r;
+        core.sleepMs(POLL_MS);
+    }
+}
+
+/// browser_fill: the fields one after the other; one line per field.
+fn fillAll(a: Allocator, tab: []const u8, fields: []const Value, fail: *core.Fail) ![]const u8 {
+    _ = try browser.eval(a, tab, FILL_JS, fail);
+    var out: std.ArrayList(u8) = .empty;
+    for (fields) |f| {
+        const name = J.str(J.get(f, "label")) orelse J.str(J.get(f, "selector")) orelse
+            try std.fmt.allocPrint(a, "[{s}]", .{if (J.get(f, "ref")) |r| try J.display(a, r) else ""});
+        const began = core.monoMs();
+        const begin = try std.mem.concat(a, u8, &.{ "window.__vibeFill.begin(", try std.json.Stringify.valueAlloc(a, f, .{}), ")" });
+        var v = try browser.eval(a, tab, begin, fail);
+        while ((J.boolean(J.get(v, "missing")) orelse false) and core.monoMs() -| began < 2_500) {
+            core.sleepMs(POLL_MS);
+            v = try browser.eval(a, tab, begin, fail);
+        }
+        var line: []const u8 = try std.fmt.allocPrint(a, "{s}: field not found", .{name});
+        if (!(J.boolean(J.get(v, "missing")) orelse false)) {
+            while (J.str(J.get(v, "done")) == null and core.monoMs() -| began < 12_000) {
+                core.sleepMs(POLL_MS);
+                v = try browser.eval(a, tab, "window.__vibeFill.poll()", fail);
+            }
+            line = J.str(J.get(v, "done")) orelse try std.fmt.allocPrint(a, "{s}: gave up waiting for its list of options", .{name});
+        }
+        try out.appendSlice(a, line);
+        try out.append(a, '\n');
+    }
+    return std.mem.trimEnd(u8, out.items, "\n");
 }
 
 /// A browser_batch step in a few words, for the list of results.
@@ -655,6 +855,14 @@ fn callBrowser(a: Allocator, chat: []const u8, name: []const u8, args: Value, fa
         if (steps.len == 0) return fail.set(a, "Pass `steps`: a list of clicks, types and key presses.", .{});
         return afterAction(a, tab, try runBatch(a, tab, steps), since);
     }
+    if (is(name, "browser_fill")) {
+        const fields = J.items(J.get(args, "fields"));
+        if (fields.len == 0) return fail.set(a, "Pass `fields`: a list of {{ label | ref | selector, value, pick }}.", .{});
+        arm(a, tab, false);
+        const r = try fillAll(a, tab, fields, fail);
+        _ = settle(a, tab, 5_000);
+        return afterAction(a, tab, r, since);
+    }
     if (is(name, "browser_screenshot")) {
         if (!browser.isVisible(tab))
             return text(a, "The Web tab is hidden (another chat or the Source code tab is in front), so there is nothing to capture.");
@@ -679,6 +887,19 @@ fn snapshotText(a: Allocator, s: Value, errors_note: []const u8) ![]const u8 {
         first = false;
         try elements.appendSlice(a, line);
     };
+    if (J.boolean(J.get(s, "diff")) orelse false) {
+        const new_text = J.str(J.get(s, "text")) orelse "";
+        return std.fmt.allocPrint(a, "URL: {s}\nTitle: {s}\n\nOnly what changed since the last look ({d} other elements are as they were, {d} gone; refs keep their numbers).\nNew or changed elements:\n{s}\n\nNew text:\n{s}{s}{s}", .{
+            J.str(J.get(s, "url")) orelse "",
+            J.str(J.get(s, "title")) orelse "",
+            J.uint(J.get(s, "same")) orelse 0,
+            J.uint(J.get(s, "gone")) orelse 0,
+            if (elements.items.len == 0) "(none)" else elements.items,
+            if (new_text.len == 0) "(none)" else new_text,
+            if (J.boolean(J.get(s, "more")) orelse false) "\n[the new text goes on: cut here]" else "",
+            errors_note,
+        });
+    }
     return std.fmt.allocPrint(a, "URL: {s}\nTitle: {s}\n\nInteractive elements:\n{s}\n\nPage text:\n{s}{s}{s}", .{
         J.str(J.get(s, "url")) orelse "",
         J.str(J.get(s, "title")) orelse "",
@@ -791,7 +1012,7 @@ test "JSON-RPC" {
 
     const list = J.parse(a, (try onPost(a, "mcp", "c", "{\"id\":4,\"method\":\"tools/list\"}")).?).?;
     const tools = J.items(J.path(list, &.{ "result", "tools" }));
-    const names = [_][]const u8{ "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press_key", "browser_screenshot", "browser_eval", "browser_batch" };
+    const names = [_][]const u8{ "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press_key", "browser_screenshot", "browser_eval", "browser_batch", "browser_fill" };
     try std.testing.expectEqual(names.len, tools.len);
     for (names, tools) |name, tool| {
         try std.testing.expectEqualStrings(name, J.str(J.get(tool, "name")).?);
@@ -812,23 +1033,27 @@ test "the scripts the browser tools run" {
 
     try std.testing.expectEqualStrings("document.querySelector('[data-vibe-ref=\"' + \"12\" + '\"]')", try findJs(a, J.parse(a, "{\"ref\":\"12\",\"selector\":\"#x\"}").?, &fail));
     try std.testing.expectEqualStrings("document.querySelector('[data-vibe-ref=\"' + \"12\" + '\"]')", try findJs(a, J.parse(a, "{\"ref\":12}").?, &fail));
-    try std.testing.expectEqualStrings("document.querySelector(\"a[href=\\\"/x\\\"]\")", try findJs(a, J.parse(a, "{\"ref\":null,\"selector\":\"a[href=\\\"/x\\\"]\"}").?, &fail));
+    try std.testing.expectEqualStrings(VISIBLE_JS ++ "(\"a[href=\\\"/x\\\"]\")", try findJs(a, J.parse(a, "{\"ref\":null,\"selector\":\"a[href=\\\"/x\\\"]\"}").?, &fail));
     try std.testing.expectError(error.Failed, findJs(a, J.parse(a, "{\"selector\":5}").?, &fail));
     try std.testing.expectEqualStrings("Pass `ref` (from browser_snapshot) or `selector`.", fail.msg);
 
     const click = try clickJs(a, "document.querySelector(\"#go\")");
-    try std.testing.expect(std.mem.startsWith(u8, click, "(() => {\n  const el = document.querySelector(\"#go\")\n  if (!el) return 'Element not found."));
+    try std.testing.expect(std.mem.startsWith(u8, click, "(() => {\n  const el = document.querySelector(\"#go\")\n  if (!el) return '" ++ NOT_FOUND ++ " (waited 2.5 s)."));
     try std.testing.expect(std.mem.endsWith(u8, click, "  el.click()\n  return 'ok'\n})()"));
 
     const typed = try typeJs(a, "document.querySelector(\"#q\")", "it's \"quoted\"\n");
-    try std.testing.expect(std.mem.startsWith(u8, typed, "(() => {\n  const el = document.querySelector(\"#q\")\n  if (!el) return"));
+    try std.testing.expect(std.mem.startsWith(u8, typed, "(() => {\n  const el = document.querySelector(\"#q\")\n  if (!el) return '" ++ NOT_FOUND));
     try std.testing.expect(std.mem.find(u8, typed, "\n  el.focus()\n  const text = \"it's \\\"quoted\\\"\\n\"\n  if (el instanceof HTMLInputElement") != null);
     try std.testing.expect(std.mem.endsWith(u8, typed, "  } else return 'That element is not a text field.'\n  return 'ok'\n})()"));
 
-    try std.testing.expect(std.mem.startsWith(u8, SNAPSHOT_JS, "((max) => {\n  const SEL = 'a[href],button,"));
+    try std.testing.expect(std.mem.startsWith(u8, SNAPSHOT_JS, "((max, diff) => {\n  const SEL = 'a[href],button,"));
+    try std.testing.expect(std.mem.startsWith(u8, FILL_JS, "(() => {\n  if (window.__vibeFill) return true\n"));
+    try std.testing.expect(std.mem.endsWith(u8, FILL_JS, "  window.__vibeFill = { begin, poll }\n  return true\n})()"));
+    try std.testing.expect(std.mem.find(u8, FILL_JS, "setTimeout") == null);
     try std.testing.expect(std.mem.find(u8, SNAPSHOT_JS, ".replace(/\\s+/g, ' ')") != null);
     try std.testing.expect(std.mem.find(u8, SNAPSHOT_JS, "replace(/\\n{3,}/g, '\\n\\n')") != null);
-    try std.testing.expect(std.mem.endsWith(u8, SNAPSHOT_JS, "return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }\n})"));
+    try std.testing.expect(std.mem.find(u8, SNAPSHOT_JS, "    return { title: document.title, url: location.href, elements, text: all.slice(0, max), more: all.length > max }\n") != null);
+    try std.testing.expect(std.mem.endsWith(u8, SNAPSHOT_JS, "text: added.slice(0, max), more: added.length > max }\n})"));
     try std.testing.expect(std.mem.startsWith(u8, ARM_JS, "((leave) => {\n  let s = window.__vibe\n"));
     try std.testing.expect(std.mem.endsWith(u8, ARM_JS, "  return true\n})"));
     try std.testing.expect(std.mem.find(u8, PAGE_STATE_JS, "Date.now() - s.changed < 120)\n") != null);
@@ -868,6 +1093,8 @@ test "tool results" {
     try std.testing.expectEqualStrings("URL: \nTitle: \n\nInteractive elements:\n(none)\n\nPage text:\n", try snapshotText(a, .null, ""));
     const long = J.parse(a, "{\"url\":\"u\",\"title\":\"T\",\"elements\":[],\"text\":\"Hello\",\"more\":true}").?;
     try std.testing.expectEqualStrings("URL: u\nTitle: T\n\nInteractive elements:\n(none)\n\nPage text:\nHello\n[the page text goes on: cut here]", try snapshotText(a, long, ""));
+    const changed = J.parse(a, "{\"url\":\"u\",\"title\":\"T\",\"diff\":true,\"elements\":[\"[7] button \\\"Go\\\"\"],\"same\":12,\"gone\":1,\"text\":\"\"}").?;
+    try std.testing.expectEqualStrings("URL: u\nTitle: T\n\nOnly what changed since the last look (12 other elements are as they were, 1 gone; refs keep their numbers).\nNew or changed elements:\n[7] button \"Go\"\n\nNew text:\n(none)", try snapshotText(a, changed, ""));
 
     try std.testing.expect(isBase64(a, "aGVsbG8="));
     try std.testing.expect(!isBase64(a, "not base64!"));
@@ -908,7 +1135,7 @@ test "the server answers over HTTP" {
     const list = try http.postJson(a, url, &auth, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
     try std.testing.expectEqual(@as(u16, 200), list.status);
     const tools = J.items(J.path(J.parse(a, list.body), &.{ "result", "tools" }));
-    try std.testing.expectEqual(@as(usize, 8), tools.len);
+    try std.testing.expectEqual(@as(usize, 9), tools.len);
     try std.testing.expectEqualStrings("browser_navigate", J.str(J.get(tools[0], "name")).?);
     try std.testing.expectEqualStrings("browser_eval", J.str(J.get(tools[6], "name")).?);
 

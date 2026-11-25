@@ -40,6 +40,11 @@ pub const commands = .{
 
 /// Hidden this long → frozen.
 const suspend_after_ms = 90_000;
+/// A hidden tab Claude drives is parked: shown to the engine, out of sight. This long after the
+/// last tool call it is hidden again.
+const park_ms = 20_000;
+/// Where a parked tab is put (physical px, left of the window): nothing of it can be seen.
+const park_x = -32_000;
 
 const Tab = struct {
     chat: []const u8,
@@ -47,6 +52,8 @@ const Tab = struct {
     /// `core.monoMs()` when it went off screen
     hidden_since: ?u64,
     suspended: bool = false,
+    /// hidden from the user but shown to the engine, off screen (see `wake`)
+    parked: bool = false,
     /// console / errors are being recorded (turned on the first time Claude's tools use the tab)
     logging: bool = false,
 };
@@ -340,6 +347,8 @@ fn sweep() void {
         core.sleepMs(15_000);
         var due: std.ArrayList([]u8) = .empty;
         defer due.deinit(core.gpa);
+        var unpark: std.ArrayList([]u8) = .empty;
+        defer unpark.deinit(core.gpa);
         {
             tabs_mutex.lock();
             defer tabs_mutex.unlock();
@@ -348,6 +357,14 @@ fn sweep() void {
             while (it.next()) |e| {
                 const t = e.value_ptr;
                 const since = t.hidden_since orelse continue;
+                if (t.parked and !t.visible and now -| since >= park_ms) {
+                    const label = core.gpa.dupe(u8, e.key_ptr.*) catch continue;
+                    unpark.append(core.gpa, label) catch {
+                        core.gpa.free(label);
+                        continue;
+                    };
+                    t.parked = false;
+                }
                 if (t.visible or t.suspended or now -| since < suspend_after_ms) continue;
                 const label = core.gpa.dupe(u8, e.key_ptr.*) catch continue;
                 due.append(core.gpa, label) catch {
@@ -356,6 +373,9 @@ fn sweep() void {
                 };
                 t.suspended = true;
             }
+        }
+        for (unpark.items) |label| {
+            if (core.is_windows) host.onUi(win.unparkTab, .{label}) else core.gpa.free(label);
         }
         for (due.items) |label| {
             if (core.is_windows) host.onUi(win.suspendTab, .{label}) else core.gpa.free(label);
@@ -508,10 +528,14 @@ fn activeTab(a: Allocator, chat: []const u8, wait_ms: i64, fail: *core.Fail) ![]
 }
 
 /// Claude is about to drive the tab: unfreeze it if it was frozen, keep it from freezing again
-/// for a while, and start recording its console errors (the first time).
+/// for a while, and start recording its console errors (the first time). A tab that is not on
+/// screen is parked: the engine throttles a hidden page (its timers run once a second, then once
+/// a minute, and it draws no frame), which made a page driven behind another tab many times
+/// slower than one the user is looking at.
 pub fn wake(a: Allocator, label: []const u8) void {
     var thaw = false;
     var log = false;
+    var park = false;
     {
         tabs_mutex.lock();
         defer tabs_mutex.unlock();
@@ -519,10 +543,13 @@ pub fn wake(a: Allocator, label: []const u8) void {
         if (!t.visible) t.hidden_since = core.monoMs();
         thaw = t.suspended;
         t.suspended = false;
+        park = !t.visible and !t.parked;
+        if (park) t.parked = true;
         log = !t.logging;
         t.logging = true;
     }
     if (thaw and core.is_windows) host.onUiSync(win.resumeTab, .{label});
+    if (park and core.is_windows) host.onUiSync(win.parkTab, .{label});
     // Only for tabs Claude drives: some sites treat a page with Runtime enabled as a bot.
     if (log) {
         var fail: core.Fail = .{};
@@ -900,8 +927,10 @@ const win = struct {
             if (changed and visible) {
                 t.hidden_since = null;
                 t.suspended = false;
+                t.parked = false;
             } else if (changed) {
                 t.hidden_since = core.monoMs();
+                t.parked = false;
             }
         }
         if (visible) {
@@ -930,6 +959,30 @@ const win = struct {
         const v3 = com.query(c.ICoreWebView2_3, view, &c.IID_ICoreWebView2_3) orelse return;
         defer com.release(@as(?*c.ICoreWebView2_3, v3));
         _ = com.call(v3, "Resume", .{});
+    }
+
+    /// A hidden tab Claude drives: shown to the engine (timers and frames at full speed), at its
+    /// own size but off screen, where the user sees nothing of it.
+    fn parkTab(label: []const u8) void {
+        const v = W.findWebview(label) orelse return;
+        const b = v.bounds orelse return;
+        v.place(.{ .x = park_x, .y = b.y, .w = b.w, .h = b.h }, true);
+        setAwake(v, true);
+    }
+
+    /// Hides a parked tab again, unless it was shown meanwhile. Takes over `label` (allocated
+    /// with `core.gpa`).
+    fn unparkTab(label: []u8) void {
+        defer core.gpa.free(label);
+        {
+            tabs_mutex.lock();
+            defer tabs_mutex.unlock();
+            const t = tabs.getPtr(label) orelse return;
+            if (t.visible or t.parked) return;
+        }
+        const v = W.findWebview(label) orelse return;
+        v.place(v.bounds, false);
+        setAwake(v, false);
     }
 
     fn resumeTab(label: []const u8) void {

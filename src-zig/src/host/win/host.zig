@@ -561,7 +561,10 @@ const EnvOptions = struct {
     v6: c.ICoreWebView2EnvironmentOptions6,
     refs: std.atomic.Value(u32) = .init(1),
 
-    const args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+    // the last three: a page that is not on screen keeps its timers at full speed (they are
+    // throttled to one a second, then one a minute), so Claude can drive a Web tab the user is
+    // not looking at as fast as one they are. A hidden tab is still frozen after a while.
+    const args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IntensiveWakeUpThrottling --disable-background-timer-throttling --disable-renderer-backgrounding";
     const version = "158.0.4370.26";
 
     fn create() *EnvOptions {
