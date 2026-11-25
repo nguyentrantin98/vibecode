@@ -84,13 +84,92 @@ fn claude_detect(call: *ipc.Call) !ClaudeInfo {
 
 const AgentInfo = struct {
     id: []const u8,
+    /// on PATH, and the agent it is named after
     found: bool,
+    /// on PATH, but another program of the same name: chats with it would close at once
+    wrong: bool = false,
 };
 
 fn agents_detect(call: *ipc.Call) ![agents.len]AgentInfo {
     var out: [agents.len]AgentInfo = undefined;
-    for (&out, agents) |*o, ag| o.* = .{ .id = ag[0], .found = core.which(call.arena, ag[1]) != null };
+    for (&out, agents) |*o, ag| {
+        const path = core.which(call.arena, ag[1]);
+        const wrong = if (path) |p| isImpostor(ag[0], ag[1], p) else false;
+        o.* = .{ .id = ag[0], .found = path != null and !wrong, .wrong = wrong };
+    }
     return out;
+}
+
+/// (id, what the agent's `--version` says) for the agents whose command name another program
+/// also goes by: npm's `codex` package (an old site generator) installs a `codex` too, and
+/// `npm install -g codex` is an easy slip for `@openai/codex`.
+const version_marks = [_][2][]const u8{
+    .{ "codex", "codex" },
+};
+
+/// Whether `--version` printed the agent's name (Codex: "codex-cli 0.46.0").
+fn saysName(stdout: []const u8, mark: []const u8) bool {
+    return std.ascii.findIgnoreCase(stdout, mark) != null;
+}
+
+var genuine_mutex: core.Mutex = .{};
+/// commands (full paths, owned by `core.gpa`) whose `--version` was right: not asked again
+var genuine: std.StringHashMapUnmanaged(void) = .empty;
+
+/// `cmd --version` on a thread of its own: a program that never exits must not hold up the app.
+const Probe = struct {
+    cmd: []const u8,
+    mark: []const u8,
+    done: std.Io.Event = .unset,
+    wrong: std.atomic.Value(bool) = .init(false),
+    /// the caller and the thread each hold it
+    refs: std.atomic.Value(u8) = .init(2),
+
+    fn release(p: *Probe) void {
+        if (p.refs.fetchSub(1, .acq_rel) == 1) core.gpa.destroy(p);
+    }
+
+    fn run(p: *Probe) void {
+        defer p.release();
+        var arena: std.heap.ArenaAllocator = .init(core.gpa);
+        defer arena.deinit();
+        // through cmd.exe: npm installs the agents as .cmd files
+        const argv: []const []const u8 = if (core.is_windows) &.{ "cmd.exe", "/d", "/c", p.cmd, "--version" } else &.{ p.cmd, "--version" };
+        // a program that cannot be run at all is not known to be another one
+        if (core.run(arena.allocator(), argv, .{ .max_output = 1 << 20 })) |r| p.wrong.store(!saysName(r.stdout, p.mark), .release) else |_| {}
+        p.done.set(core.io);
+    }
+};
+
+/// Whether the `cmd` found at `path` is another program than the agent `id`: asked with
+/// `--version`, given 8 s to answer. Unknown (no answer, cannot run) counts as the agent.
+fn isImpostor(id: []const u8, cmd: []const u8, path: []const u8) bool {
+    const mark = for (version_marks) |vm| {
+        if (std.mem.eql(u8, vm[0], id)) break vm[1];
+    } else return false;
+    {
+        genuine_mutex.lock();
+        defer genuine_mutex.unlock();
+        if (genuine.contains(path)) return false;
+    }
+    const p = core.gpa.create(Probe) catch return false;
+    p.* = .{ .cmd = cmd, .mark = mark };
+    const t = std.Thread.spawn(.{}, Probe.run, .{p}) catch {
+        core.gpa.destroy(p);
+        return false;
+    };
+    t.detach();
+    defer p.release();
+    p.done.waitTimeout(core.io, .{ .duration = .{ .raw = .fromSeconds(8), .clock = .awake } }) catch return false;
+    if (p.wrong.load(.acquire)) return true;
+    // a wrong one is asked again next time: the user may have installed the right one since
+    genuine_mutex.lock();
+    defer genuine_mutex.unlock();
+    if (!genuine.contains(path)) {
+        const key = core.gpa.dupe(u8, path) catch return false;
+        genuine.put(core.gpa, key, {}) catch core.gpa.free(key);
+    }
+    return false;
 }
 
 // ---------------- processes ----------------
@@ -1145,4 +1224,16 @@ test "finding claude" {
     try testing.expectEqualStrings("claude", found[0].id);
     // on PATH, or where the installers put it; whichever, the file is there
     if (claudePath(call.arena)) |p| try testing.expect(core.isFile(p)) else try testing.expect(!found[0].found);
+    // never both: a command that is another program is not the agent
+    for (found) |f| try testing.expect(!(f.found and f.wrong));
+}
+
+test "a command that only shares the agent's name" {
+    try testing.expect(saysName("codex-cli 0.46.0\n", "codex"));
+    try testing.expect(saysName("OpenAI Codex v1.2.0", "codex"));
+    // npm's other `codex` package prints a bare version, or nothing
+    try testing.expect(!saysName("0.2.3\n", "codex"));
+    try testing.expect(!saysName("", "codex"));
+    // only Codex's command is known to have a namesake
+    try testing.expect(!isImpostor("claude", "claude", "C:\\nowhere\\claude.cmd"));
 }

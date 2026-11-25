@@ -86,6 +86,9 @@ export function NewChatMenu(props: { title: string; className?: string; size?: n
             <div className="menu-sep">{t('New chat with', 'Chat mới với')}</div>
             {[...AGENTS.filter((a) => found(a.id)), ...AGENTS.filter((a) => !found(a.id))].map((a) => {
               const ok = found(a.id)
+              // the command is there, but it is another program of the same name
+              const wrong = !ok && !!agents.find((x) => x.id === a.id)?.wrong
+              const fix = a.clash ? `npm uninstall -g ${a.clash}\n${a.install}` : a.install
               return (
                 <button
                   key={a.id}
@@ -93,11 +96,23 @@ export function NewChatMenu(props: { title: string; className?: string; size?: n
                   title={
                     ok
                       ? t(`Start a ${a.label} chat in this folder`, `Bắt đầu chat ${a.label} trong thư mục này`)
-                      : t(`${a.label} isn't installed — click to copy:\n${a.install}`, `Chưa cài ${a.label} — bấm để sao chép:\n${a.install}`)
+                      : wrong
+                        ? t(`The "${a.cmd}" command on this PC is not ${a.label} — click to copy the fix:\n${fix}`, `Lệnh "${a.cmd}" trên máy này không phải ${a.label} — bấm để sao chép lệnh sửa:\n${fix}`)
+                        : t(`${a.label} isn't installed — click to copy:\n${a.install}`, `Chưa cài ${a.label} — bấm để sao chép:\n${a.install}`)
                   }
                   onClick={() => {
                     setAt(null)
                     if (ok) return onPick(a.id)
+                    if (wrong) {
+                      navigator.clipboard.writeText(fix.replace(/\n/g, '; ')).catch(() => {})
+                      window.alert(
+                        t(
+                          `The "${a.cmd}" command on this PC is not ${a.label}: "${a.cmd} --version" does not answer like ${a.label}, so another program with the same name is installed and a chat would close right away.\n\nRun these in a terminal (copied to the clipboard), then reopen VIBE CODE:\n${fix}`,
+                          `Lệnh "${a.cmd}" trên máy này không phải ${a.label}: "${a.cmd} --version" không trả lời như ${a.label}, tức là đang cài một chương trình khác trùng tên và chat sẽ tắt ngay khi mở.\n\nHãy chạy các lệnh sau trong terminal (đã sao chép vào clipboard), rồi mở lại VIBE CODE:\n${fix}`
+                        )
+                      )
+                      return
+                    }
                     navigator.clipboard.writeText(a.install).catch(() => {})
                     window.alert(
                       t(
@@ -108,7 +123,7 @@ export function NewChatMenu(props: { title: string; className?: string; size?: n
                   }}
                 >
                   <span className="menu-item-main">{a.label}</span>
-                  <span className="menu-item-sub">{!ok ? t('not installed', 'chưa cài') : a.id === def ? t('default', 'mặc định') : a.cmd}</span>
+                  <span className="menu-item-sub">{wrong ? t('wrong program', 'sai chương trình') : !ok ? t('not installed', 'chưa cài') : a.id === def ? t('default', 'mặc định') : a.cmd}</span>
                 </button>
               )
             })}
