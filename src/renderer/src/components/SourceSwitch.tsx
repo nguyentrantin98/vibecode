@@ -16,12 +16,12 @@ export function SourceSwitch(): React.JSX.Element {
   return (
     <div className="code-side-switch">
       <SlidePill />
-      <button className={side === 'files' ? 'on' : ''} title={t('Files and Git changes of this project', 'Tệp và thay đổi Git của dự án này')} onClick={() => useStore.setState({ centerView: 'code' })}>
-        <FileText size={13} /> <span className="code-side-label">{t('Files', 'Tệp')}</span>
+      <button className={side === 'files' ? 'on' : ''} title={t('Files: the files and Git changes of this project', 'Tệp: tệp và thay đổi Git của dự án này')} onClick={() => useStore.setState({ centerView: 'code' })}>
+        <FileText size={14} />
         {changed > 0 && <span className="center-count">{changed}</span>}
       </button>
-      <button className={side === 'pc' ? 'on' : ''} title={t('Browse and read any file on this computer', 'Duyệt và đọc mọi tệp trên máy tính này')} onClick={() => useStore.setState({ centerView: 'files' })}>
-        <Monitor size={13} /> <span className="code-side-label">This PC</span>
+      <button className={side === 'pc' ? 'on' : ''} title={t('This PC: browse and read any file on this computer', 'This PC: duyệt và đọc mọi tệp trên máy tính này')} onClick={() => useStore.setState({ centerView: 'files' })}>
+        <Monitor size={14} />
       </button>
       <button className="code-side-fold" title={folded ? t('Expand the column', 'Mở rộng cột') : t('Collapse the column', 'Thu gọn cột')} onClick={fold}>
         {folded ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}

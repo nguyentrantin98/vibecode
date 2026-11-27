@@ -22,18 +22,62 @@ import type { ZaloTasksState } from '../../../shared/types'
 import { revealIn } from '../scroll'
 import { tr, useT } from '../i18n'
 
-/** Middle area: fixed tabs — Source code (project files, diffs, and This PC: any file on the computer), Web (built-in browser), Database, … */
-export function EditorArea(): React.JSX.Element {
+/**
+ * The center tabs, as icons in the title bar: Source code (project files, diffs, and This PC: any
+ * file on the computer), Web (built-in browser), Database, Zalo, Gmail, Office.
+ */
+export function CenterTabs(): React.JSX.Element {
   const t = useT()
   const view = useStore((s) => s.centerView)
   const fileCount = useStore((s) => s.tabs.length)
-  const key = useStore((s) => browserKey(s.activeChatId))
-  const browsers = useStore((s) => s.browsers)
   // Source code holds two views (the project / This PC): its tab brings back the one used last
   const lastSource = useRef<'code' | 'files'>('code')
   useEffect(() => {
     if (view === 'code' || view === 'files') lastSource.current = view
   }, [view])
+  const zaloBadge = useZaloBadge(view === 'zalo')
+  return (
+    <div className="center-switch" role="tablist">
+      <SlidePill />
+      <button
+        role="tab"
+        aria-selected={view === 'code' || view === 'files'}
+        className={view === 'code' || view === 'files' ? 'on' : ''}
+        title={t('Source code: project files, Git changes and This PC (Ctrl+1)', 'Mã nguồn: tệp dự án, thay đổi Git và This PC (Ctrl+1)')}
+        onClick={() => useStore.setState({ centerView: lastSource.current })}
+      >
+        <Code2 size={15} />
+        {fileCount > 0 && <span className="center-count">{fileCount}</span>}
+      </button>
+      <button role="tab" aria-selected={view === 'web'} className={view === 'web' ? 'on' : ''} title="Web (Ctrl+2)" onClick={() => openBrowser()}>
+        <Globe size={15} />
+      </button>
+      <button role="tab" aria-selected={view === 'db'} className={view === 'db' ? 'on' : ''} title="Database (Ctrl+3)" onClick={() => useStore.setState({ centerView: 'db' })}>
+        <Database size={15} />
+      </button>
+      <button role="tab" aria-selected={view === 'zalo'} className={view === 'zalo' ? 'on' : ''} title="Zalo (Ctrl+4)" onClick={() => useStore.setState({ centerView: 'zalo' })}>
+        <MessageCircle size={15} />
+        {zaloBadge > 0 && (
+          <span key={zaloBadge} className="center-count alert" title={t(`${zaloBadge} new / updated ${zaloBadge === 1 ? 'task' : 'tasks'}`, `${zaloBadge} việc mới / vừa cập nhật`)}>
+            {zaloBadge > 99 ? '99+' : zaloBadge}
+          </span>
+        )}
+      </button>
+      <button role="tab" aria-selected={view === 'gmail'} className={view === 'gmail' ? 'on' : ''} title="Gmail (Ctrl+5)" onClick={() => useStore.setState({ centerView: 'gmail' })}>
+        <Mail size={15} />
+      </button>
+      <button role="tab" aria-selected={view === 'office'} className={view === 'office' ? 'on' : ''} title="Office (Ctrl+6)" onClick={() => useStore.setState({ centerView: 'office' })}>
+        <FileSpreadsheet size={15} />
+      </button>
+    </div>
+  )
+}
+
+/** The pane of the open center tab. */
+export function EditorArea(): React.JSX.Element {
+  const view = useStore((s) => s.centerView)
+  const key = useStore((s) => browserKey(s.activeChatId))
+  const browsers = useStore((s) => s.browsers)
   // the Database tab mounts on first visit, then stays (keeps its SQL, results and open tree)
   const [filesSeen, setFilesSeen] = useState(view === 'files')
   const [dbSeen, setDbSeen] = useState(view === 'db')
@@ -49,46 +93,12 @@ export function EditorArea(): React.JSX.Element {
   }, [view])
   // Claude's sheet tools run in the Office tab: mount it (it picks the waiting call up) without showing it
   useEffect(() => window.api.office.onRequest(() => setOfficeSeen(true)), [])
-  const zaloBadge = useZaloBadge(view === 'zalo')
   // switching chats while on Web: give that chat its own browser (before paint: no empty frame)
   useLayoutEffect(() => {
     if (view === 'web' && !browsers[key]) openBrowser()
   }, [view, key, browsers])
   return (
     <div className="center-area">
-      <div className="center-switch" role="tablist">
-        <SlidePill />
-        <button
-          role="tab"
-          aria-selected={view === 'code' || view === 'files'}
-          className={view === 'code' || view === 'files' ? 'on' : ''}
-          title={t('Project files, Git changes and This PC', 'Tệp dự án, thay đổi Git và This PC')}
-          onClick={() => useStore.setState({ centerView: lastSource.current })}
-        >
-          <Code2 size={14} /> <span className="center-label">{t('Source code', 'Mã nguồn')}</span>
-          {fileCount > 0 && <span className="center-count">{fileCount}</span>}
-        </button>
-        <button role="tab" aria-selected={view === 'web'} className={view === 'web' ? 'on' : ''} onClick={() => openBrowser()}>
-          <Globe size={14} /> <span className="center-label">Web</span>
-        </button>
-        <button role="tab" aria-selected={view === 'db'} className={view === 'db' ? 'on' : ''} onClick={() => useStore.setState({ centerView: 'db' })}>
-          <Database size={14} /> <span className="center-label">Database</span>
-        </button>
-        <button role="tab" aria-selected={view === 'zalo'} className={view === 'zalo' ? 'on' : ''} onClick={() => useStore.setState({ centerView: 'zalo' })}>
-          <MessageCircle size={14} /> <span className="center-label">Zalo</span>
-          {zaloBadge > 0 && (
-            <span key={zaloBadge} className="center-count alert" title={t(`${zaloBadge} new / updated ${zaloBadge === 1 ? 'task' : 'tasks'}`, `${zaloBadge} việc mới / vừa cập nhật`)}>
-              {zaloBadge > 99 ? '99+' : zaloBadge}
-            </span>
-          )}
-        </button>
-        <button role="tab" aria-selected={view === 'gmail'} className={view === 'gmail' ? 'on' : ''} onClick={() => useStore.setState({ centerView: 'gmail' })}>
-          <Mail size={14} /> <span className="center-label">Gmail</span>
-        </button>
-        <button role="tab" aria-selected={view === 'office'} className={view === 'office' ? 'on' : ''} onClick={() => useStore.setState({ centerView: 'office' })}>
-          <FileSpreadsheet size={14} /> <span className="center-label">Office</span>
-        </button>
-      </div>
       {/*
         Panes stay mounted and laid out; only the open one (`on`) is visible. display:none would drop
         their scroll positions, make Monaco re-measure on return and replay every animation inside.

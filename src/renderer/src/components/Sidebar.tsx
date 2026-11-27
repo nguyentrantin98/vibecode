@@ -106,12 +106,12 @@ function ChatsView(): React.JSX.Element {
       </div>
       <div className="sidebar-foot">
         <button
-          className="btn btn-primary btn-block"
+          className="icon-btn"
           disabled={disabled}
-          title={t('Pick (or make) a folder and start a chat in it', 'Chọn (hoặc tạo) một thư mục và bắt đầu chat trong đó')}
+          title={t('New project: pick (or make) a folder and start a chat in it', 'Dự án mới: chọn (hoặc tạo) một thư mục và bắt đầu chat trong đó')}
           onClick={() => openFolder(null, { autoChat: true })}
         >
-          <FolderPlus size={15} /> {t('New project', 'Dự án mới')}
+          <FolderPlus size={16} />
         </button>
       </div>
     </>

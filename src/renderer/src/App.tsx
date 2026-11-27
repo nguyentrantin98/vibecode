@@ -6,11 +6,12 @@ import { onGlobalKey } from './shortcuts'
 import { focusTerm } from './terminals'
 import { reloadIfClean } from './fileModelsLite'
 import { syncLang } from './i18n'
-import { QuickOpen, StatusBar, TitleBar, Welcome } from './components/Chrome'
+import { ActivityBar, QuickOpen, StatusBar, TitleBar, Welcome } from './components/Chrome'
 import { Sidebar } from './components/Sidebar'
 import { EditorArea } from './components/Editor'
 import { BottomPanel, ClaudePanel } from './components/Claude'
 import { ContextMenuHost } from './components/ContextMenu'
+import { TooltipHost } from './components/Tooltip'
 
 function useGlobalKeys(): void {
   useEffect(() => {
@@ -72,7 +73,8 @@ export default function App(): React.JSX.Element {
   const quickOpen = useStore((s) => s.quickOpen)
   const dropdown = useStore((s) => s.win?.mode === 'dropdown')
   // layouts are remembered per set of visible panels (sidebar / bottom panel can be toggled)
-  const layoutH = useDefaultLayout({ id: 'layout-h', panelIds: sidebarOpen ? ['sidebar', 'center', 'claude'] : ['center', 'claude'], storage: localStorage })
+  // chats on the left (one column each), the center tabs on the right
+  const layoutH = useDefaultLayout({ id: 'layout-cols', panelIds: sidebarOpen ? ['sidebar', 'claude', 'center'] : ['claude', 'center'], storage: localStorage })
   const layoutV = useDefaultLayout({ id: 'layout-v', panelIds: bottomOpen ? ['editor', 'bottom'] : ['editor'], storage: localStorage })
 
   return (
@@ -82,16 +84,21 @@ export default function App(): React.JSX.Element {
         <Welcome />
       ) : (
         <div className="workbench">
+          <ActivityBar />
           <Group orientation="horizontal" className="panels" defaultLayout={layoutH.defaultLayout} onLayoutChanged={layoutH.onLayoutChanged}>
             {sidebarOpen && (
               <>
-                <Panel id="sidebar" defaultSize="19%" minSize="13%" maxSize="35%">
+                <Panel id="sidebar" defaultSize="16%" minSize="11%" maxSize="35%">
                   <Sidebar />
                 </Panel>
                 <Handle dir="h" />
               </>
             )}
-            <Panel id="center" defaultSize="45%" minSize="20%">
+            <Panel id="claude" defaultSize="52%" minSize="20%">
+              <ClaudePanel />
+            </Panel>
+            <Handle dir="h" />
+            <Panel id="center" defaultSize="32%" minSize="15%">
               <Group orientation="vertical" defaultLayout={layoutV.defaultLayout} onLayoutChanged={layoutV.onLayoutChanged}>
                 <Panel id="editor" defaultSize="68%" minSize="20%">
                   <EditorArea />
@@ -106,16 +113,13 @@ export default function App(): React.JSX.Element {
                 )}
               </Group>
             </Panel>
-            <Handle dir="h" />
-            <Panel id="claude" defaultSize="36%" minSize="22%">
-              <ClaudePanel />
-            </Panel>
           </Group>
         </div>
       )}
       <StatusBar />
       {quickOpen && <QuickOpen />}
       <ContextMenuHost />
+      <TooltipHost />
     </div>
   )
 }

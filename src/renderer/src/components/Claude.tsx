@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, FileText, Gauge, Image as ImageIcon, ListChecks, MessageSquare, Monitor, Copy, Download, GitCommitHorizontal, Shield, ShieldOff, History, Plus, RefreshCw, RotateCcw, Sparkles, Play, FastForward, Upload, Paperclip, Square, SquareTerminal, Trash2, X, ExternalLink, Ellipsis, FolderOpen, FlaskConical, ScanSearch, Shrink, KeyRound } from 'lucide-react'
-import { useStore, type Chat } from '../store'
+import { Bot, Brain, Check, ChevronDown, FileText, Gauge, GitBranch, GripVertical, Image as ImageIcon, ListChecks, MessageSquare, Monitor, Copy, Download, GitCommitHorizontal, Shield, ShieldCheck, ShieldOff, History, Plus, RefreshCw, RotateCcw, Sparkles, Play, FastForward, Upload, Paperclip, Square, SquareTerminal, Trash2, X, ExternalLink, Ellipsis, FlaskConical, ScanSearch, Shrink, KeyRound } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
+import { basename, useStore, type Chat } from '../store'
 import { SlidePill, useEnterAnimation } from './motion'
 import {
   closeChat,
@@ -8,7 +9,10 @@ import {
   defaultAgent,
   detectClaude,
   newChat,
+  newChatIn,
   newChatWith,
+  openSession,
+  samePath,
   newShell,
   restartChat,
   selectChat,
@@ -30,6 +34,8 @@ import { ChatTasks, useChatTasks } from './ChatTasks'
 import { ChatView } from './ChatView'
 import { ChatFiles, useChatFiles } from './ChatFiles'
 import { ChatTitle, chatMenu } from './Sidebar'
+import { openMenu } from './ContextMenu'
+import { revealIn } from '../scroll'
 import { AttachmentTray } from './AttachmentTray'
 import { pickAttachments } from '../attachments'
 import { NewChatMenu } from './AgentMenu'
@@ -113,211 +119,321 @@ const PUBLISH = (t: T): string =>
     'Publish backend của project này: build ở chế độ Release và publish theo cách project đã thiết lập (publish profile hoặc script). Cho tôi biết output nằm ở đâu và có gì lỗi không.'
   )
 
+/**
+ * Every open chat side by side, one column each — drag a column by its grip to move it. The
+ * column you click is the active chat: Source code, Web and the shortcuts follow it.
+ */
 export function ClaudePanel(): React.JSX.Element {
-  const t = useT()
-  // only the open chat: other chats' status / title changes don't re-render this panel
-  const active = useStore((s) => s.chats.find((c) => c.id === s.activeChatId) ?? null)
-  const activeId = active?.id ?? null
+  // only the list of ids: a chat's status / title changes re-render its own column, not all of them
+  const ids = useStore(useShallow((s) => s.chats.map((c) => c.id)))
   const claude = useStore((s) => s.claude)
   // Codex / Gemini… alone is enough to chat; the install card is for when no agent is there at all
   const anyAgent = useStore((s) => !!s.claude?.found || s.agents.some((a) => a.found))
-  const images = useChatImages(active?.sessionId)
-  const tasks = useChatTasks(active?.sessionId)
-  const runningTasks = tasks.filter((t) => t.status === 'running').length
-  const files = useChatFiles(active?.sessionId)
-  const changedFiles = files.filter((f) => f.action !== 'read').length
-  const [tab, setTab] = useState<'chat' | 'terminal' | 'images' | 'files' | 'tasks'>('terminal')
-  // Chat (drawn from Claude's transcript) or Terminal: the last one you picked; other agents only have the terminal
-  const [lastView, setLastView] = useState<'chat' | 'terminal'>('terminal')
-  const hasChatView = !!active && agentDef(active.agent).id === 'claude'
-  const view = hasChatView ? lastView : 'terminal'
-  // another chat opens on that view
+  const cols = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState<string | null>(null)
+
+  return (
+    <div className="claude-panel">
+      {claude && !anyAgent && <InstallCard />}
+      {anyAgent && ids.length === 0 && <NoChat />}
+      {ids.length > 0 && (
+        <div className="chat-cols" ref={cols}>
+          {ids.map((id) => (
+            <ChatColumn key={id} id={id} cols={cols} dragging={dragging} onDragging={setDragging} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Puts chat `id` where chat `target` is (the ones in between shift over). */
+function moveChat(id: string, target: string): void {
+  useStore.setState((s) => {
+    const from = s.chats.findIndex((c) => c.id === id)
+    const to = s.chats.findIndex((c) => c.id === target)
+    if (from < 0 || to < 0 || from === to) return {}
+    const chats = [...s.chats]
+    chats.splice(to, 0, ...chats.splice(from, 1))
+    return { chats }
+  })
+}
+
+/** Branch and number of changed files of a chat's project (from the Source code tab when it shows that project). */
+function useChatGit(cwd: string, status: Chat['status']): { branch: string | null; changes: number } | null {
+  const root = useStore((s) => s.root)
+  const shown = !!root && samePath(root, cwd)
+  const git = useStore((s) => s.git)
+  const [own, setOwn] = useState<{ branch: string | null; changes: number } | null>(null)
+  // another project: asked once, then again whenever the chat stops working (it may have changed files)
   useEffect(() => {
-    setTab(view)
-    if (view === 'terminal' && activeId) setTimeout(() => focusTerm(activeId), 0)
-  }, [activeId])
-  // the terminal stays under the other tabs, so it must not keep the keyboard
-  const leaveTerminal = (t: 'chat' | 'images' | 'files' | 'tasks'): void => {
+    if (shown || !cwd || status === 'working') return
+    let alive = true
+    window.api.git
+      .state(cwd)
+      .then((g) => alive && setOwn(g.isRepo ? { branch: g.branch, changes: g.files.length } : null))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [cwd, shown, status])
+  if (shown) return git.isRepo ? { branch: git.branch, changes: git.files.length } : null
+  return own
+}
+
+type ColTab = 'chat' | 'terminal' | 'images' | 'files' | 'tasks'
+
+function ChatColumn(props: { id: string; cols: React.RefObject<HTMLDivElement | null>; dragging: string | null; onDragging: (id: string | null) => void }): React.JSX.Element | null {
+  const { id, cols, dragging, onDragging } = props
+  const t = useT()
+  const chat = useStore((s) => s.chats.find((c) => c.id === id))
+  const active = useStore((s) => s.activeChatId === id)
+  const images = useChatImages(chat?.sessionId)
+  const tasks = useChatTasks(chat?.sessionId)
+  const runningTasks = tasks.filter((x) => x.status === 'running').length
+  const files = useChatFiles(chat?.sessionId)
+  const changedFiles = files.filter((f) => f.action !== 'read').length
+  const git = useChatGit(chat?.cwd ?? '', chat?.status ?? 'idle')
+  const [tab, setTab] = useState<ColTab>('terminal')
+  // Chat (drawn from Claude's transcript) or Terminal: the last one picked; other agents only have the terminal
+  const [lastView, setLastView] = useState<'chat' | 'terminal'>('terminal')
+  const [dropHere, setDropHere] = useState(false)
+  const col = useRef<HTMLDivElement>(null)
+  const termFrame = useRef<HTMLDivElement>(null)
+  const isClaude = !!chat && agentDef(chat.agent).id === 'claude'
+  const view = isClaude ? lastView : 'terminal'
+
+  // the terminal stays under the other views, so it must not keep the keyboard
+  const leaveTerminal = (to: Exclude<ColTab, 'terminal'>): void => {
     const el = document.activeElement
     if (el instanceof HTMLElement && termFrame.current?.contains(el)) el.blur()
-    if (t === 'chat') setLastView('chat')
-    setTab(t)
+    if (to === 'chat') setLastView('chat')
+    setTab(to)
   }
   const showTerminal = (): void => {
     setLastView('terminal')
     setTab('terminal')
-    setTimeout(() => active && focusTerm(active.id), 0)
+    setTimeout(() => focusTerm(id), 0)
   }
+  // back to the conversation; the keyboard goes to the terminal only when it shows
+  const backToView = (): void => {
+    setTab(view)
+    if (view === 'terminal') focusTerm(id)
+  }
+  // Images / Files / Tasks: a second click on the open one goes back to the conversation
+  const toggleTab = (to: 'images' | 'files' | 'tasks'): void => (tab === to ? backToView() : leaveTerminal(to))
+
   // Claude waits on a numbered choice (permission prompt, plan approval…): only its terminal can answer, so show it
   useEffect(() => {
-    if (!activeId) return
-    let shown = menuShown(activeId)
+    let shown = menuShown(id)
     const i = setInterval(() => {
-      const now = menuShown(activeId)
-      if (now && !shown) {
-        setTab('terminal')
-        focusTerm(activeId)
-      }
+      const now = menuShown(id)
+      if (now && !shown) setTab('terminal')
       shown = now
     }, 700)
     return () => clearInterval(i)
-  }, [activeId])
-  // a quick action: back to the conversation, keyboard in the terminal only when it shows
-  const backToView = (): void => {
-    setTab(view)
-    if (view === 'terminal' && active) focusTerm(active.id)
-  }
-  // switching chats: the new conversation eases in
-  const termFrame = useRef<HTMLDivElement>(null)
-  useEnterAnimation(termFrame, activeId)
+  }, [id])
+  useEnterAnimation(termFrame, id)
+  // picked with Alt+1…9 or from the sidebar: scroll its column into view
+  useEffect(() => {
+    if (active) revealIn(cols.current, col.current, { inline: 'nearest', smooth: true })
+  }, [active, cols])
 
-  // the bar over the quick actions: moving while the chat works, green once that run has finished
-  const busy = active?.status === 'working' || active?.status === 'starting'
+  // the line over the footer: moving while the chat works, green once that run has finished
+  const busy = chat?.status === 'working' || chat?.status === 'starting'
   const [done, setDone] = useState(false)
   const wasBusy = useRef(false)
   useEffect(() => {
-    wasBusy.current = false
-    setDone(false)
-  }, [activeId])
-  useEffect(() => {
     if (busy) setDone(false)
-    else if (wasBusy.current && active?.status === 'idle') setDone(true)
+    else if (wasBusy.current && chat?.status === 'idle') setDone(true)
     wasBusy.current = busy
-  }, [busy, active?.status])
+  }, [busy, chat?.status])
 
-  // Chats are picked from the sidebar, so there is no tab strip here — just the open chat's title row.
+  if (!chat) return null
+  const project = basename(chat.cwd)
+  const openSource = (): void => {
+    selectChat(id, false)
+    useStore.setState({ centerView: 'code' })
+  }
+  const history = (e: React.MouseEvent): void => {
+    const open = new Set(useStore.getState().chats.map((c) => c.sessionId))
+    const sessions = useStore
+      .getState()
+      .projects.filter((g) => samePath(g.cwd, chat.cwd))
+      .flatMap((g) => g.sessions)
+      .filter((s) => !open.has(s.id))
+      .sort((a, b) => b.updated - a.updated)
+      .slice(0, 15)
+    const r = e.currentTarget.getBoundingClientRect()
+    openMenu(
+      { clientX: r.left, clientY: r.bottom + 4, preventDefault: () => e.preventDefault(), stopPropagation: () => e.stopPropagation() },
+      sessions.length
+        ? sessions.map((s) => ({ label: s.title, hint: ago(s.updated, t), icon: <MessageSquare size={14} />, action: () => openSession(s) }))
+        : [{ label: t(`No earlier chats in ${project}`, `Chưa có chat cũ trong ${project}`), disabled: true, action: () => {} }]
+    )
+  }
+
   return (
-    <div className="claude-panel">
-      {claude && !anyAgent && <InstallCard />}
-      {anyAgent && !active && <NoChat />}
-
-      {active && (
-        <>
-          <div className="chat-titlebar">
-            <div className="chat-titlebar-main" onContextMenu={(e) => chatMenu(e, { chatId: active.id }, 'title')}>
-              <StatusDot status={active.status} attention={active.attention} />
-              <ChatTitle place="title" chatId={active.id} title={active.title} className="chat-titlebar-title" />
-              {active.cwd && (
-                <span className="chat-project" title={`Project: ${active.cwd}`}>
-                  <FolderOpen size={12} />
-                  <span>{active.cwd.split(/[\\/]/).filter(Boolean).pop()}</span>
-                </span>
-              )}
-              {agentDef(active.agent).id !== 'claude' && <span className="chat-agent">{agentDef(active.agent).label}</span>}
-              <span className={`chat-state s-${active.status}`}>{statusText(active.status, t)}</span>
-            </div>
-            <div className="chat-titlebar-actions">
-              {active.status === 'exited' && (
-                <button className="btn btn-ghost btn-sm" onClick={() => restartChat(active.id)}>
-                  <RefreshCw size={13} /> {t('Restart', 'Khởi động lại')}
-                </button>
-              )}
-              {agentDef(active.agent).id === 'claude' && <BypassProjectButton chat={active} />}
-              <NewChatMenu
-                title={t('New chat with the default agent (Ctrl+Shift+N) — right-click to pick another AI', 'Chat mới với agent mặc định (Ctrl+Shift+N) — chuột phải để chọn AI khác')}
-                onPick={newChatWith}
-              />
-              <button className="icon-btn" title={t('Close chat (it stays in the sidebar history)', 'Đóng chat (vẫn còn trong lịch sử ở thanh bên)')} onClick={() => closeChat(active.id)}>
-                <X size={15} />
-              </button>
-            </div>
-          </div>
-          <div className="code-side-switch chat-tabs">
-            <SlidePill />
-            <button
-              className={tab === 'terminal' || tab === 'chat' ? 'on' : ''}
-              title={t("The conversation: Claude Code's own screen or a chat", 'Cuộc trò chuyện: màn hình gốc của Claude Code hoặc dạng chat')}
-              onClick={() => (view === 'terminal' ? showTerminal() : leaveTerminal('chat'))}
-            >
-              <SquareTerminal size={13} /> Terminal
+    <div
+      ref={col}
+      className={`chat-col${active ? ' active' : ''}${dragging === id ? ' dragging' : ''}${dropHere ? ' drop' : ''}`}
+      onMouseDownCapture={() => !active && selectChat(id, false)}
+      onDragOver={(e) => {
+        if (!dragging || dragging === id) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        setDropHere(true)
+      }}
+      onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setDropHere(false)}
+      onDrop={(e) => {
+        setDropHere(false)
+        if (!dragging || dragging === id) return
+        e.preventDefault()
+        moveChat(dragging, id)
+      }}
+    >
+      <div className="chat-col-head" onContextMenu={(e) => chatMenu(e, { chatId: id }, 'title')}>
+        <span
+          className="chat-col-grip"
+          draggable
+          title={t('Drag to move this chat', 'Kéo để đổi chỗ chat này')}
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move'
+            e.dataTransfer.setData('text/plain', chat.title)
+            if (col.current) e.dataTransfer.setDragImage(col.current, 20, 16)
+            onDragging(id)
+          }}
+          onDragEnd={() => onDragging(null)}
+        >
+          <GripVertical size={13} />
+        </span>
+        <span className="chat-col-dot" title={statusText(chat.status, t)}>
+          <StatusDot status={chat.status} attention={chat.attention} />
+        </span>
+        <span className="chat-col-project" title={t(`Project: ${chat.cwd}`, `Dự án: ${chat.cwd}`)}>
+          {project}
+        </span>
+        {!isClaude && <span className="chat-agent">{agentDef(chat.agent).label}</span>}
+        <ChatTitle place="title" chatId={id} title={chat.title} className="chat-col-title" />
+        <div className="chat-col-actions">
+          {chat.status === 'exited' && (
+            <button className="icon-btn" title={t('Restart', 'Khởi động lại')} onClick={() => restartChat(id)}>
+              <RefreshCw size={14} />
             </button>
-            <button className={tab === 'images' ? 'on' : ''} onClick={() => leaveTerminal('images')}>
-              <ImageIcon size={13} /> {t('Images', 'Ảnh')}
-              {images.length > 0 && <span className="center-count">{images.length}</span>}
-            </button>
-            <button className={tab === 'files' ? 'on' : ''} title={t('Files Claude created, edited or read in this chat', 'Các tệp Claude đã tạo, sửa hoặc đọc trong chat này')} onClick={() => leaveTerminal('files')}>
-              <FileText size={13} /> {t('Files', 'Tệp')}
-              {changedFiles > 0 && <span className="center-count">{changedFiles}</span>}
-            </button>
-            <button className={tab === 'tasks' ? 'on' : ''} title={t('Background tasks Claude started in this chat', 'Các việc chạy nền Claude đã bắt đầu trong chat này')} onClick={() => leaveTerminal('tasks')}>
-              <ListChecks size={13} /> {t('Tasks', 'Việc')}
-              {runningTasks > 0 ? <span className="center-count running">{runningTasks}</span> : tasks.length > 0 && <span className="center-count">{tasks.length}</span>}
-            </button>
-          </div>
-          {hasChatView && (tab === 'terminal' || tab === 'chat') && (
-            <div className="code-side-switch term-views">
-              <SlidePill />
-              <button className={tab === 'terminal' ? 'on' : ''} title={t("Claude Code's own screen", 'Màn hình gốc của Claude Code')} onClick={showTerminal}>
-                <SquareTerminal size={12} /> {t('Terminal view', 'Dạng terminal')}
-              </button>
-              <button className={tab === 'chat' ? 'on' : ''} title={t('The conversation, with tool calls folded up', 'Cuộc trò chuyện, với các lệnh gọi tool được thu gọn')} onClick={() => leaveTerminal('chat')}>
-                <MessageSquare size={12} /> {t('Chat view', 'Dạng chat')}
-              </button>
-            </div>
           )}
-          {/*
-            The terminal stays mounted and laid out (only made invisible): display:none would reset
-            xterm's scroll position to the top of the buffer and replay the enter animation on return.
-            Chat / Images / Files / Tasks cover it instead.
-          */}
-          <div className="term-frame" ref={termFrame}>
-            <div className="term-layer" style={tab === 'terminal' ? undefined : { visibility: 'hidden' }}>
-              <TerminalView id={active.id} autoFocus={false} />
-            </div>
-            <StartSkeleton show={active.status === 'starting'} />
-            {tab !== 'terminal' && (
-              <div className="chat-overlay">
-                {tab === 'chat' ? (
-                  <ChatView chat={active} onTerminal={showTerminal} />
-                ) : tab === 'images' ? (
-                  <ChatImages images={images} />
-                ) : tab === 'files' ? (
-                  <ChatFiles files={files} cwd={active.cwd} />
-                ) : (
-                  <ChatTasks tasks={tasks} />
-                )}
-              </div>
+          <button className="icon-btn" title={t(`Earlier chats in ${project}`, `Các chat trước trong ${project}`)} onClick={history}>
+            <History size={14} />
+          </button>
+          <NewChatMenu
+            className="icon-btn"
+            size={15}
+            title={t(`New chat in ${project} — right-click to pick another AI`, `Chat mới trong ${project} — chuột phải để chọn AI khác`)}
+            onPick={(agent) => void newChatIn(chat.cwd, agent)}
+          />
+          <button className="icon-btn" title={t('Close chat (it stays in the sidebar history)', 'Đóng chat (vẫn còn trong lịch sử ở thanh bên)')} onClick={() => closeChat(id)}>
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+      {/*
+        The terminal stays mounted and laid out (only made invisible): display:none would reset
+        xterm's scroll position to the top of the buffer and replay the enter animation on return.
+        Chat / Images / Files / Tasks cover it instead.
+      */}
+      <div className="term-frame" ref={termFrame}>
+        <div className="term-layer" style={tab === 'terminal' ? undefined : { visibility: 'hidden' }}>
+          <TerminalView id={id} autoFocus={false} />
+        </div>
+        <StartSkeleton show={chat.status === 'starting'} />
+        {tab !== 'terminal' && (
+          <div className="chat-overlay">
+            {tab === 'chat' ? (
+              <ChatView chat={chat} onTerminal={showTerminal} />
+            ) : tab === 'images' ? (
+              <ChatImages images={images} />
+            ) : tab === 'files' ? (
+              <ChatFiles files={files} cwd={chat.cwd} />
+            ) : (
+              <ChatTasks tasks={tasks} />
             )}
           </div>
-          {/* the Chat tab shows the tray itself, right above its message box */}
-          {tab !== 'chat' && <AttachmentTray chatId={active.id} />}
-          <div className={`quick-bar${busy ? ' busy' : done ? ' done' : ''}`}>
-            {active.status === 'working' && (
-              <button
-                className="chip chip-stop"
-                title={t('Stop what the AI is doing (Esc)', 'Dừng việc AI đang làm (Esc)')}
-                onClick={() => {
-                  writeToTerm(active.id, '\x1b')
-                  backToView()
-                }}
-              >
-                <Square size={10} fill="currentColor" />
-                {t('Stop', 'Dừng')}
-              </button>
-            )}
-            <button
-              className="chip"
-              title={t(
-                'Attach files — they go with your next message (you can also paste pictures or drag files onto the chat)',
-                'Đính kèm tệp — gửi kèm tin nhắn tiếp theo (cũng có thể dán ảnh hoặc kéo tệp vào chat)'
-              )}
-              disabled={active.status === 'exited'}
-              onClick={async () => {
-                await pickAttachments(active.id, active.cwd)
-                backToView()
-              }}
-            >
-              <Paperclip size={12} />
-              <span className="chip-label">{t('Attach files', 'Đính kèm tệp')}</span>
-            </button>
-            <MoreMenu chat={active} onDone={backToView} />
-            <ChatPickers chat={active} />
-          </div>
-          {agentDef(active.agent).id === 'claude' && <ContextBar chat={active} />}
-        </>
-      )}
+        )}
+      </div>
+      {/* the Chat view shows the tray itself, right above its message box */}
+      {tab !== 'chat' && <AttachmentTray chatId={id} />}
+      <div className={`quick-bar chat-col-foot${busy ? ' busy' : done ? ' done' : ''}`}>
+        {isClaude && (
+          <button
+            className="icon-btn"
+            title={view === 'terminal' ? t('Show as a chat (tool calls folded up)', 'Xem dạng chat (thu gọn lệnh gọi tool)') : t("Show Claude Code's own screen", 'Xem màn hình gốc của Claude Code')}
+            onClick={() => (view === 'terminal' ? leaveTerminal('chat') : showTerminal())}
+          >
+            {view === 'terminal' ? <MessageSquare size={14} /> : <SquareTerminal size={14} />}
+          </button>
+        )}
+        <button className={`icon-btn${tab === 'images' ? ' on' : ''}`} title={t(`Images in this chat (${images.length})`, `Ảnh trong chat này (${images.length})`)} onClick={() => toggleTab('images')}>
+          <ImageIcon size={14} />
+          {images.length > 0 && <i className="foot-badge">{images.length}</i>}
+        </button>
+        <button className={`icon-btn${tab === 'files' ? ' on' : ''}`} title={t('Files Claude created, edited or read in this chat', 'Tệp Claude đã tạo, sửa hoặc đọc trong chat này')} onClick={() => toggleTab('files')}>
+          <FileText size={14} />
+          {changedFiles > 0 && <i className="foot-badge">{changedFiles}</i>}
+        </button>
+        <button className={`icon-btn${tab === 'tasks' ? ' on' : ''}`} title={t('Background tasks Claude started in this chat', 'Việc chạy nền Claude đã bắt đầu trong chat này')} onClick={() => toggleTab('tasks')}>
+          <ListChecks size={14} />
+          {runningTasks > 0 ? <i className="foot-badge running">{runningTasks}</i> : tasks.length > 0 && <i className="foot-badge">{tasks.length}</i>}
+        </button>
+        {git && (
+          <button
+            className="foot-branch"
+            title={t(`${git.branch ?? 'HEAD'} · ${git.changes} changed — open Source code`, `${git.branch ?? 'HEAD'} · ${git.changes} thay đổi — mở Mã nguồn`)}
+            onClick={openSource}
+          >
+            <GitBranch size={13} />
+            {git.changes > 0 && <i className="foot-badge">{git.changes > 99 ? '99+' : git.changes}</i>}
+            <span>{git.branch ?? 'HEAD'}</span>
+          </button>
+        )}
+        <div className="foot-fill">{isClaude && <ContextBar chat={chat} />}</div>
+        {chat.status === 'working' && (
+          <button
+            className="icon-btn foot-stop"
+            title={t('Stop what the AI is doing (Esc)', 'Dừng việc AI đang làm (Esc)')}
+            onClick={() => {
+              writeToTerm(id, '\x1b')
+              backToView()
+            }}
+          >
+            <Square size={11} fill="currentColor" />
+          </button>
+        )}
+        <button
+          className="icon-btn"
+          title={t(
+            'Attach files — they go with your next message (you can also paste pictures or drag files onto the chat)',
+            'Đính kèm tệp — gửi kèm tin nhắn tiếp theo (cũng có thể dán ảnh hoặc kéo tệp vào chat)'
+          )}
+          disabled={chat.status === 'exited'}
+          onClick={async () => {
+            await pickAttachments(id, chat.cwd)
+            backToView()
+          }}
+        >
+          <Paperclip size={14} />
+        </button>
+        <ChatPickers chat={chat} />
+        <MoreMenu chat={chat} onDone={backToView} />
+      </div>
     </div>
   )
+}
+
+function ago(time: number, t: T): string {
+  const m = Math.floor((Date.now() - time) / 60000)
+  if (m < 60) return t(`${Math.max(1, m)}m`, `${Math.max(1, m)} phút`)
+  const h = Math.floor(m / 60)
+  if (h < 24) return t(`${h}h`, `${h} giờ`)
+  return t(`${Math.floor(h / 24)}d`, `${Math.floor(h / 24)} ngày`)
 }
 
 /** Until the agent draws its first screen: a shimmering outline of its banner and prompt, faded out once it has. */
@@ -346,29 +462,6 @@ function StartSkeleton({ show }: { show: boolean }): React.JSX.Element | null {
         <span className="sk" style={{ width: '34%' }} />
       </div>
     </div>
-  )
-}
-
-/** One click: Claude never asks for permission anywhere in this chat's project. */
-function BypassProjectButton({ chat }: { chat: Chat }): React.JSX.Element {
-  const t = useT()
-  const on = useStore((s) => !!s.projectBypass[folderKey(chat.cwd)])
-  useEffect(() => {
-    loadProjectBypass(chat.cwd)
-  }, [chat.cwd])
-  return (
-    <button
-      className={`btn btn-sm bypass-btn${on ? ' on' : ''}`}
-      title={
-        on
-          ? t(`Bypass is on for ${chat.cwd} — click to turn off`, `Bypass đang bật cho ${chat.cwd} — bấm để tắt`)
-          : t(`Bypass permissions for the whole project ${chat.cwd}`, `Không hỏi quyền trong toàn bộ project ${chat.cwd}`)
-      }
-      onClick={() => toggleProjectBypass(chat.id)}
-    >
-      {on ? <ShieldOff size={13} /> : <Shield size={13} />}
-      <span className="bypass-label">{on ? t('Project bypassed', 'Đã bypass project') : t('Bypass project', 'Bypass project')}</span>
-    </button>
   )
 }
 
@@ -566,6 +659,10 @@ function MoreMenu({ chat, onDone }: { chat: Chat; onDone: () => void }): React.J
   const [copied, setCopied] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const btn = useRef<HTMLButtonElement>(null)
+  const bypass = useStore((s) => !!s.projectBypass[folderKey(chat.cwd)])
+  useEffect(() => {
+    loadProjectBypass(chat.cwd)
+  }, [chat.cwd])
   useEffect(() => {
     if (open)
       window.api.claude
@@ -704,16 +801,24 @@ function MoreMenu({ chat, onDone }: { chat: Chat; onDone: () => void }): React.J
               setOpen(false)
               void toggleDesktop(chat.id)
             }
-          }
+          },
+        isClaude && {
+          key: 'bypass',
+          icon: bypass ? <ShieldOff size={14} /> : <Shield size={14} />,
+          label: t('Bypass project', 'Bypass project'),
+          hint: t(`Never ask for permission anywhere in ${chat.cwd}`, `Không hỏi quyền ở mọi nơi trong ${chat.cwd}`),
+          on: bypass,
+          run: () => toggleProjectBypass(chat.id)
+        }
       ]
     }
   ]
 
   return (
     <div className="more-wrap" ref={ref}>
-      <button ref={btn} className={`chip more-btn${open ? ' open' : ''}`} title={t('More: quick prompts, Git, tokens, desktop control', 'Thêm: prompt nhanh, Git, token, điều khiển desktop')}onClick={() => setOpen(!open)}>
+      <button ref={btn} className={`chip more-btn${open ? ' open' : ''}`} title={t('More: quick prompts, Git, tokens, desktop control, bypass', 'Thêm: prompt nhanh, Git, token, điều khiển desktop, bypass')} onClick={() => setOpen(!open)}>
         <Ellipsis size={14} />
-        {(chat.desktop || off > 0) && <i className="more-dot" />}
+        {(chat.desktop || off > 0 || bypass) && <i className={`more-dot${bypass ? ' warn' : ''}`} />}
       </button>
       {open && (
         <div className="sb-menu more-menu" role="menu">
@@ -782,7 +887,7 @@ function sendPrompt(id: string, text: string): void {
   setTimeout(() => writeToTerm(id, '\r'), 150)
 }
 
-/** Model / effort / permission mode, at the right of the bar under the chat. */
+/** Model / effort / permission mode, as icons at the right of the bar under the chat (the value is in the tooltip). */
 function ChatPickers({ chat }: { chat: Chat }): React.JSX.Element {
   const t = useT()
   const agent = agentDef(chat.agent)
@@ -791,10 +896,11 @@ function ChatPickers({ chat }: { chat: Chat }): React.JSX.Element {
   const modes = isClaude ? MODES(t) : agent.yolo.length ? MODES(t).filter((m) => !m.value || m.value === 'bypassPermissions') : []
   return (
     <div className="sb-pickers">
-      {isClaude && <Picker title="Model" options={MODELS(t)} value={chat.model ?? ''} onPick={(v) => setChatModel(chat.id, v)} />}
-      {isClaude && <Picker title={t('Effort', 'Mức suy nghĩ')} options={EFFORTS(t)} value={chat.effort ?? ''} onPick={(v) => setChatEffort(chat.id, v)} />}
+      {isClaude && <Picker icon={<Bot size={14} />} title="Model" options={MODELS(t)} value={chat.model ?? ''} onPick={(v) => setChatModel(chat.id, v)} />}
+      {isClaude && <Picker icon={<Brain size={14} />} title={t('Effort', 'Mức suy nghĩ')} options={EFFORTS(t)} value={chat.effort ?? ''} onPick={(v) => setChatEffort(chat.id, v)} />}
       {modes.length > 0 && (
         <Picker
+          icon={chat.permissionMode === 'bypassPermissions' ? <ShieldOff size={14} /> : <ShieldCheck size={14} />}
           title={t('Permission mode (restarts the chat)', 'Chế độ quyền (khởi động lại chat)')}
           options={modes}
           value={chat.permissionMode ?? ''}
@@ -913,8 +1019,8 @@ function ContextBar({ chat }: { chat: Chat }): React.JSX.Element {
   )
 }
 
-function Picker(props: { title: string; options: Opt[]; value: string; warn?: boolean; onPick: (v: string) => void }): React.JSX.Element {
-  const { title, options, value, warn, onPick } = props
+function Picker(props: { icon: React.ReactNode; title: string; options: Opt[]; value: string; warn?: boolean; onPick: (v: string) => void }): React.JSX.Element {
+  const { icon, title, options, value, warn, onPick } = props
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -935,8 +1041,8 @@ function Picker(props: { title: string; options: Opt[]; value: string; warn?: bo
   const cur = options.find((o) => o.value === value) ?? options[0]
   return (
     <div className="sb-picker" ref={ref}>
-      <button className={`sb-btn${open ? ' open' : ''}${warn ? ' warn' : ''}`} title={`${cur.label} — ${title}`} onClick={() => setOpen(!open)}>
-        {cur.label}
+      <button className={`sb-btn${open ? ' open' : ''}${warn ? ' warn' : ''}`} title={`${title}: ${cur.label}`} onClick={() => setOpen(!open)}>
+        {icon}
       </button>
       {open && (
         <div className="sb-menu" role="menu">

@@ -1,18 +1,12 @@
 import { invoke } from '../native'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { SlidePill } from './motion'
 import {
-  ChevronDown,
   CircleCheck,
   CircleAlert,
-  Files,
   FolderOpen,
   GitBranch,
-  GitCompare,
   Loader2,
   MessagesSquare,
-  PanelLeft,
-  PanelBottom,
   Search,
   Clock,
   ArrowDownToLine,
@@ -24,13 +18,13 @@ import {
   Link2,
   Check,
   Droplet,
-  Globe,
   Moon,
   Sun,
-  SquareDashedPlus
+  SquareDashedPlus,
+  SquareTerminal
 } from 'lucide-react'
-import { basename, useStore, type SidebarView } from '../store'
-import { defaultAgent, installedAgents, openBrowser, openFile, openFolder, openSession, setDefaultAgent, toggleBottom, toggleTheme } from '../actions'
+import { basename, useStore } from '../store'
+import { defaultAgent, installedAgents, openFile, openFolder, openSession, setDefaultAgent, toggleBottom, toggleTheme } from '../actions'
 import { AGENTS, agentDef } from '../../../shared/agents'
 import { languageOf } from '../fileModelsLite'
 import { FileIcon, Logo } from './icons'
@@ -42,6 +36,7 @@ import { giveFiles } from '../terminals'
 import { COMMANDS, type Command } from '../shortcuts'
 import { RemoteButton } from './RemotePanel'
 import { setLang, useT, type T } from '../i18n'
+import { CenterTabs } from './Editor'
 
 /* ================================ Title bar ================================ */
 
@@ -58,7 +53,8 @@ function dragWindow(e: React.MouseEvent): void {
   else void invoke('win_start_drag')
 }
 
-export function TitleBar(): React.JSX.Element {
+/** Open folder… and the recent projects (activity bar). */
+function FolderSwitch(): React.JSX.Element {
   const root = useStore((s) => s.root)
   const recent = useStore((s) => s.recent)
   const [menu, setMenu] = useState(false)
@@ -72,50 +68,56 @@ export function TitleBar(): React.JSX.Element {
   }, [menu])
 
   return (
+    <div className="folder-switch" onMouseDown={(e) => e.stopPropagation()}>
+      <button
+        className={`activity-item${menu ? ' active' : ''}`}
+        title={root ? t(`Project: ${root} — open another folder (Ctrl+O)`, `Dự án: ${root} — mở thư mục khác (Ctrl+O)`) : t('Open folder (Ctrl+O)', 'Mở thư mục (Ctrl+O)')}
+        onClick={() => setMenu(!menu)}
+      >
+        <FolderOpen size={19} strokeWidth={1.7} />
+      </button>
+      {menu && (
+        <div className="menu">
+          <button
+            className="menu-item"
+            onClick={() => {
+              setMenu(false)
+              openFolder()
+            }}
+          >
+            <FolderOpen size={14} /> {t('Open folder…', 'Mở thư mục…')}
+          </button>
+          {recent.length > 1 && <div className="menu-sep">{t('Recent', 'Gần đây')}</div>}
+          {recent
+            .filter((r) => r !== root)
+            .map((r) => (
+              <button
+                key={r}
+                className="menu-item"
+                onClick={() => {
+                  setMenu(false)
+                  openFolder(r)
+                }}
+              >
+                <Clock size={14} />
+                <span className="menu-item-main">{basename(r)}</span>
+                <span className="menu-item-sub">{r}</span>
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Center tabs (icons) on the left, search in the middle, window tools on the right. */
+export function TitleBar(): React.JSX.Element {
+  const root = useStore((s) => s.root)
+  const t = useT()
+
+  return (
     <div className={window.api.platform === 'darwin' ? 'titlebar mac' : 'titlebar'} onMouseDown={dragWindow}>
-      <div className="titlebar-left">
-        <Logo size={18} />
-        <span className="app-name">VIBE <b>CODE</b></span>
-        {root && (
-          <div className="folder-switch" onMouseDown={(e) => e.stopPropagation()}>
-            <button className="folder-btn" onClick={() => setMenu(!menu)}>
-              <FolderOpen size={13} />
-              {basename(root)}
-              <ChevronDown size={12} />
-            </button>
-            {menu && (
-              <div className="menu">
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenu(false)
-                    openFolder()
-                  }}
-                >
-                  <FolderOpen size={14} /> {t('Open folder…', 'Mở thư mục…')}
-                </button>
-                {recent.length > 1 && <div className="menu-sep">{t('Recent', 'Gần đây')}</div>}
-                {recent
-                  .filter((r) => r !== root)
-                  .map((r) => (
-                    <button
-                      key={r}
-                      className="menu-item"
-                      onClick={() => {
-                        setMenu(false)
-                        openFolder(r)
-                      }}
-                    >
-                      <Clock size={14} />
-                      <span className="menu-item-main">{basename(r)}</span>
-                      <span className="menu-item-sub">{r}</span>
-                    </button>
-                  ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <div className="titlebar-left">{root ? <CenterTabs /> : <Logo size={18} />}</div>
       {root && (
         <button className="search-box" onClick={() => useStore.setState({ quickOpen: true })}>
           <Search size={13} />
@@ -124,15 +126,6 @@ export function TitleBar(): React.JSX.Element {
         </button>
       )}
       <div className="titlebar-right">
-        <button className="icon-btn" title={t('Toggle sidebar (Ctrl+B)', 'Bật/tắt thanh bên (Ctrl+B)')} onClick={() => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen }))}>
-          <PanelLeft size={15} />
-        </button>
-        <button className="icon-btn" title={t('Toggle terminal (Ctrl+`)', 'Bật/tắt terminal (Ctrl+`)')} onClick={() => toggleBottom()}>
-          <PanelBottom size={15} />
-        </button>
-        <button className="icon-btn" title={t('Open browser', 'Mở trình duyệt')} onClick={() => openBrowser()}>
-          <Globe size={15} />
-        </button>
         <CaptureButton />
         <ThemeToggle />
         <LangToggle />
@@ -269,13 +262,11 @@ function ModeSwitch(): React.JSX.Element | null {
   const drop = win.mode === 'dropdown'
   return (
     <button
-      className={`mode-switch${drop ? ' on' : ''}`}
+      className={`icon-btn${drop ? ' accent' : ''}`}
       title={drop ? t('Switch to a normal window', 'Chuyển sang cửa sổ thường') : t(`Drop-down mode: ${win.hotkey} slides VIBE CODE over any app`, `Chế độ thả xuống: ${win.hotkey} trượt VIBE CODE xuống trên mọi ứng dụng`)}
       onClick={() => window.api.win.setMode(drop ? 'window' : 'dropdown')}
     >
-      <ArrowDownToLine size={13} />
-      <span>{drop ? t('Drop-down', 'Thả xuống') : 'Guake'}</span>
-      {win.hotkeyOk && <kbd>{win.hotkey}</kbd>}
+      <ArrowDownToLine size={15} />
     </button>
   )
 }
@@ -312,36 +303,31 @@ function WindowControls(): React.JSX.Element | null {
 
 /* ================================ Activity bar ================================ */
 
+/** The strip on the left: the chats sidebar, the project folder and the terminal panel. */
 export function ActivityBar(): React.JSX.Element {
-  const view = useStore((s) => s.sidebarView)
   const open = useStore((s) => s.sidebarOpen)
+  const bottom = useStore((s) => s.bottomOpen)
+  const hasRoot = useStore((s) => !!s.root)
   const attention = useStore((s) => s.chats.filter((c) => c.attention).length)
   const working = useStore((s) => s.chats.some((c) => c.status === 'working'))
-  const changes = useStore((s) => s.git.files.length)
   const t = useT()
-
-  const item = (v: SidebarView, icon: React.ReactNode, title: string, badge?: React.ReactNode): React.JSX.Element => (
-    <button
-      className={`activity-item${view === v && open ? ' active' : ''}`}
-      title={title}
-      onClick={() => useStore.setState((s) => (s.sidebarView === v && s.sidebarOpen ? { sidebarOpen: false } : { sidebarView: v, sidebarOpen: true }))}
-    >
-      {icon}
-      {badge}
-    </button>
-  )
 
   return (
     <div className="activity-bar">
-      <SlidePill />
-      {item(
-        'chats',
-        <MessagesSquare size={20} strokeWidth={1.7} />,
-        t('Chats', 'Chat'),
-        attention > 0 ? <span className="badge accent">{attention}</span> : working ? <span className="badge-pulse" /> : null
+      <button
+        className={`activity-item${open ? ' active' : ''}`}
+        title={t('Projects and chats (Ctrl+B)', 'Dự án và chat (Ctrl+B)')}
+        onClick={() => useStore.setState((s) => ({ sidebarOpen: !s.sidebarOpen, sidebarView: 'chats' }))}
+      >
+        <MessagesSquare size={19} strokeWidth={1.7} />
+        {attention > 0 ? <span className="badge accent">{attention}</span> : working ? <span className="badge-pulse" /> : null}
+      </button>
+      <FolderSwitch />
+      {hasRoot && (
+        <button className={`activity-item${bottom ? ' active' : ''}`} title={t('Terminal (Ctrl+`)', 'Terminal (Ctrl+`)')} onClick={() => toggleBottom()}>
+          <SquareTerminal size={19} strokeWidth={1.7} />
+        </button>
       )}
-      {item('explorer', <Files size={20} strokeWidth={1.7} />, 'Explorer (Ctrl+Shift+E)')}
-      {item('changes', <GitCompare size={20} strokeWidth={1.7} />, t('Changes (Ctrl+Shift+G)', 'Thay đổi (Ctrl+Shift+G)'), changes > 0 ? <span className="badge">{changes > 99 ? '99+' : changes}</span> : null)}
     </div>
   )
 }

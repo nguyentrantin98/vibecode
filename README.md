@@ -20,7 +20,8 @@ Run the installer (no admin rights needed, it installs for the current user). VI
 
 ## Features
 
-- **Parallel chats**: run several Claude Code sessions side by side, per project. Other agents (Codex, Gemini…) work too.
+- **Parallel chats**: every open chat gets its own column, side by side (drag a column by its grip to move it); the column you click drives the Source code and Web tabs on the right. Other agents (Codex, Gemini…) work too.
+- **Minimal UI**: buttons are icons only; hover one for its name. The center tabs (Source code, Web, Database, Zalo, Gmail, Office) sit in the title bar.
 - **Claude history**: the Chats sidebar lists every project and conversation from `~/.claude/projects` (shared with the Claude desktop app, the CLI and the IDE extensions) and updates live. Clicking a conversation resumes it in its own folder.
 - **Editor + Git**: Monaco editor, go to file / symbol, a live *Changes* panel with diffs, commit history and a branch switcher.
 - **Terminal**: integrated terminals (ConPTY, WebGL rendering).

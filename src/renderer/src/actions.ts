@@ -301,7 +301,7 @@ useStore.subscribe((s, prev) => {
 
 /* ---------------- Folder ---------------- */
 
-const samePath = (a: string, b: string): boolean =>
+export const samePath = (a: string, b: string): boolean =>
   a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase()
 
 let openSeq = 0
@@ -703,7 +703,7 @@ export async function setChatPermission(id: string, mode: string): Promise<void>
   restartChat(id)
 }
 
-export function selectChat(id: string): void {
+export function selectChat(id: string, focus = true): void {
   const chat = st().chats.find((c) => c.id === id)
   useStore.setState({ activeChatId: id })
   if (chat?.attention) st().patchChat(id, { attention: false })
@@ -713,7 +713,7 @@ export function selectChat(id: string): void {
     const folder = proj?.cwd ?? chat.cwd
     if (st().root && !samePath(st().root!, folder) && !samePath(st().root!, chat.cwd)) openFolder(folder, { autoChat: false })
   }
-  setTimeout(() => focusTerm(id), 0)
+  if (focus) setTimeout(() => focusTerm(id), 0)
 }
 
 /**
@@ -739,6 +739,8 @@ export async function newChatFromZaloTask(taskId: string, title: string, project
   newChat({
     cwd,
     agent: 'claude',
+    // --name saves the task's title in the session (custom-title), so the chat history keeps it after the chat closes
+    args: ['--name', title.slice(0, 60)],
     title: title.slice(0, 60),
     pinnedTitle: true,
     // typed into the input box, not sent: you add your own notes and press Enter yourself
