@@ -998,7 +998,7 @@ const resize_script =
 
 // ---------------- serving the app's pages ----------------
 
-const csp = "default-src 'self'; connect-src 'self' " ++ origin ++ " ws://localhost:* http://localhost:*; script-src 'self'; style-src 'self' 'unsafe-inline'; " ++
+const csp = "default-src 'self'; connect-src 'self' " ++ origin ++ " https://open-vsx.org ws://localhost:* http://localhost:*; script-src 'self'; style-src 'self' 'unsafe-inline'; " ++
     "img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; worker-src 'self' blob:; frame-src http://127.0.0.1:*";
 
 const Pending = struct {
