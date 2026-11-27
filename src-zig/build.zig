@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const os = target.result.os.tag;
     const renderer = b.option([]const u8, "renderer", "folder of the built pages (default ../out/renderer)") orelse "../out/renderer";
-    const version = b.option([]const u8, "version", "app version") orelse "0.2.41";
+    const version = b.option([]const u8, "version", "app version") orelse "0.2.42";
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);

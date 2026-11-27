@@ -1,6 +1,6 @@
 .{
     .name = .vibe_code,
-    .version = "0.2.41",
+    .version = "0.2.42",
     .fingerprint = 0x21661da9d2c85c0,
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
