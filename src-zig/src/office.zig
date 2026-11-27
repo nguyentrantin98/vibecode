@@ -1,131 +1,215 @@
-//! Office tab: Word, Excel, PowerPoint and PDF, each open file in an ONLYOFFICE editor (onlyoffice.zig)
-//! that the page drives and that turns the file into its bytes and back. This side only:
-//!   - reads and writes the files, with the file dialog, and keeps the "recent files" list;
-//!   - relays Claude's vibe-office tool calls to the page, which runs them on what the user sees:
-//!     `office:request` goes out (also kept in a queue until the tab is mounted and picks it up),
-//!     `office_reply` brings the answer back.
+//! Office tab → GenOffice (github.com/genspark-ai/genoffice, Apache-2.0): Word, Excel, PowerPoint and
+//! PDF files open in the GenOffice app, a separate program. This side:
+//!   - finds GenOffice on the machine, and on Windows downloads and installs it (its own installer,
+//!     silent, per-user) when the user asks;
+//!   - opens files in it, with the file dialog, and keeps the "recent files" list;
+//!   - tells Claude how to start GenOffice's own MCP server (`genoffice mcp`, see `mcpLaunch`), whose
+//!     tools read and edit the .docx / .xlsx / .pptx / .pdf files themselves.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("core.zig");
 const ipc = @import("ipc.zig");
+const http = @import("http.zig");
 const settings = @import("settings.zig");
 const dialog = @import("dialog.zig");
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
+const tr = settings.tr;
 
 pub const commands = .{
     .{ "office_pick", office_pick },
-    .{ "office_read_file", office_read_file },
-    .{ "office_write_file", office_write_file },
-    .{ "office_backup", office_backup },
     .{ "office_recent", office_recent },
     .{ "office_recent_add", office_recent_add },
-    .{ "office_pending", office_pending },
-    .{ "office_reply", office_reply },
+    .{ "office_status", office_status },
+    .{ "office_install", office_install },
+    .{ "office_open", office_open },
 };
+
+/// The ONLYOFFICE editor the Office tab used to download (several hundred MB) is not used any more.
+pub fn init() void {
+    core.spawn(dropOnlyOffice, .{});
+}
+
+fn dropOnlyOffice() void {
+    const dir = core.dataPath(core.gpa, &.{"onlyoffice"}) catch return;
+    defer core.gpa.free(dir);
+    Dir.cwd().deleteTree(core.io, dir) catch {};
+}
+
+// ---------------- GenOffice on this machine ----------------
+
+pub const Install = struct {
+    /// the program: GenOffice.exe, or GenOffice.app on macOS
+    app: []const u8,
+    /// its command line's folder (resources\cli): genoffice.cjs / genoffice
+    cli: []const u8,
+};
+
+fn found(a: Allocator, app: []const u8, cli: []const u8) ?Install {
+    const ok = if (core.is_windows)
+        core.isFile(app) and core.isFile(std.fs.path.join(a, &.{ cli, "genoffice.cjs" }) catch return null)
+    else
+        core.isDir(app) and core.isFile(std.fs.path.join(a, &.{ cli, "genoffice" }) catch return null);
+    return if (ok) .{ .app = app, .cli = cli } else null;
+}
+
+/// GenOffice where it is installed: the folder the app last wrote to ~/.genoffice/launcher, else
+/// the installer's default places.
+pub fn find(a: Allocator) ?Install {
+    const launcher = std.fs.path.join(a, &.{ core.home(), ".genoffice", "launcher" }) catch return null;
+    if (core.readFileAlloc(a, launcher, 64 << 10)) |text| {
+        const p = std.mem.trim(u8, text, " \t\r\n\"");
+        const cli = if (core.isDir(p)) p else std.fs.path.dirname(p) orelse p;
+        // <app>\resources\cli (Windows), GenOffice.app/Contents/Resources/cli (macOS)
+        const app = if (core.is_windows)
+            std.fs.path.resolve(a, &.{ cli, "..", "..", "GenOffice.exe" }) catch return null
+        else
+            std.fs.path.resolve(a, &.{ cli, "..", "..", ".." }) catch return null;
+        if (found(a, app, cli)) |i| return i;
+    } else |_| {}
+    if (core.is_windows) {
+        const roots = [_]?[]const u8{
+            if (core.getenv("LOCALAPPDATA")) |l| std.fs.path.join(a, &.{ l, "Programs" }) catch null else null,
+            core.getenv("ProgramFiles"),
+        };
+        for (roots) |r| {
+            const dir = std.fs.path.join(a, &.{ r orelse continue, "GenOffice" }) catch continue;
+            const app = std.fs.path.join(a, &.{ dir, "GenOffice.exe" }) catch continue;
+            const cli = std.fs.path.join(a, &.{ dir, "resources", "cli" }) catch continue;
+            if (found(a, app, cli)) |i| return i;
+        }
+    } else if (core.is_mac) {
+        const apps = [_][]const u8{ "/Applications/GenOffice.app", std.fs.path.join(a, &.{ core.home(), "Applications", "GenOffice.app" }) catch "" };
+        for (apps) |app| {
+            const cli = std.fs.path.join(a, &.{ app, "Contents", "Resources", "cli" }) catch continue;
+            if (found(a, app, cli)) |i| return i;
+        }
+    }
+    return null;
+}
+
+pub const Launch = struct {
+    command: []const u8,
+    args: []const []const u8,
+    /// ELECTRON_RUN_AS_NODE on Windows; empty elsewhere
+    env_name: []const u8 = "",
+    env_value: []const u8 = "",
+};
+
+/// How Claude starts GenOffice's MCP server (stdio), as `genoffice mcp install` writes it: on
+/// Windows GenOffice.exe runs the bundled CLI as Node (MCP clients spawn without a shell, so
+/// genoffice.cmd is not an option). Null while GenOffice is not installed.
+pub fn mcpLaunch(a: Allocator) ?Launch {
+    const i = find(a) orelse return null;
+    if (core.is_windows) return .{
+        .command = i.app,
+        .args = a.dupe([]const u8, &.{ std.fs.path.join(a, &.{ i.cli, "genoffice.cjs" }) catch return null, "mcp" }) catch return null,
+        .env_name = "ELECTRON_RUN_AS_NODE",
+        .env_value = "1",
+    };
+    return .{ .command = std.fs.path.join(a, &.{ i.cli, "genoffice" }) catch return null, .args = a.dupe([]const u8, &.{"mcp"}) catch return null };
+}
+
+pub const Status = struct {
+    installed: bool,
+    /// where it is (GenOffice.exe / GenOffice.app)
+    app: ?[]const u8 = null,
+    /// this platform gets it installed from here (else: the download page)
+    can_install: bool,
+    /// an install is running
+    installing: bool,
+};
+
+var install_running: std.atomic.Value(bool) = .init(false);
+
+fn status(a: Allocator) Status {
+    const i = find(a);
+    return .{ .installed = i != null, .app = if (i) |x| x.app else null, .can_install = core.is_windows, .installing = install_running.load(.acquire) };
+}
+
+fn office_status(c: *ipc.Call) !Status {
+    return status(c.arena);
+}
+
+const Release = struct {
+    tag_name: ?[]const u8 = null,
+    assets: []const struct { name: []const u8 = "", browser_download_url: ?[]const u8 = null, size: u64 = 0 } = &.{},
+};
+
+const Progress = struct {
+    total: u64,
+    last: u64 = 0,
+    fn tell(ctx: ?*anyopaque, done: u64, total: ?u64) void {
+        const p: *Progress = @ptrCast(@alignCast(ctx.?));
+        const all = total orelse p.total;
+        // every half percent is plenty
+        if (done != all and done - p.last < all / 200) return;
+        p.last = done;
+        core.emit("office:install", .{ .phase = "download", .done = done, .total = all });
+    }
+};
+
+/// Downloads GenOffice's newest Windows installer from its GitHub releases and runs it silently
+/// (a per-user install, no administrator rights); `office:install` events report the progress.
+fn office_install(c: *ipc.Call) !Status {
+    const a = c.arena;
+    if (!core.is_windows) return c.failMsg(tr("Install GenOffice from github.com/genspark-ai/genoffice/releases.", "Cài GenOffice từ github.com/genspark-ai/genoffice/releases."));
+    if (find(a) != null) return status(a);
+    if (install_running.swap(true, .acq_rel)) return c.failMsg(tr("GenOffice is already being installed.", "GenOffice đang được cài."));
+    defer install_running.store(false, .release);
+
+    const res = http.get(a, "https://api.github.com/repos/genspark-ai/genoffice/releases/latest", &.{.{ .name = "Accept", .value = "application/vnd.github+json" }}) catch |e|
+        return c.fail("github.com: {s}", .{@errorName(e)});
+    if (!res.ok()) return c.fail("github.com: HTTP {d}", .{res.status});
+    const rel = core.fromJson(Release, a, res.body) catch Release{};
+    const suffix = if (builtin.cpu.arch == .aarch64) "-arm64.exe" else "-x64.exe";
+    const asset = for (rel.assets) |x| {
+        if (std.mem.startsWith(u8, x.name, "GenOfficeSetup") and std.mem.endsWith(u8, x.name, suffix) and x.browser_download_url != null) break x;
+    } else return c.fail("{s} {s}", .{ tr("No Windows installer in GenOffice's latest release", "Bản phát hành mới nhất của GenOffice không có bộ cài Windows"), rel.tag_name orelse "" });
+
+    const file = try std.fs.path.join(a, &.{ core.tempDir(), asset.name });
+    defer Dir.cwd().deleteFile(core.io, file) catch {};
+    var progress: Progress = .{ .total = asset.size };
+    const head = http.download(a, asset.browser_download_url.?, .{}, file, Progress.tell, &progress) catch |e|
+        return c.fail("{s} {s}", .{ tr("Download failed:", "Tải về thất bại:"), @errorName(e) });
+    if (head.status < 200 or head.status >= 300) return c.fail("{s} HTTP {d}", .{ tr("Download failed:", "Tải về thất bại:"), head.status });
+
+    core.emit("office:install", .{ .phase = "install", .done = asset.size, .total = asset.size });
+    // NSIS: /S = silent
+    var child = std.process.spawn(core.io, .{ .argv = &.{ file, "/S" }, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore }) catch |e|
+        return c.fail("{s} {s}", .{ tr("Could not start the installer:", "Không chạy được bộ cài:"), @errorName(e) });
+    const term = child.wait(core.io) catch |e| return c.fail("{s} {s}", .{ tr("The installer failed:", "Bộ cài bị lỗi:"), @errorName(e) });
+    if (term != .exited or term.exited != 0) return c.failMsg(tr("The GenOffice installer did not finish.", "Bộ cài GenOffice chưa cài xong."));
+    if (find(a) == null) return c.failMsg(tr("GenOffice was installed, but VIBE CODE cannot find it.", "Đã cài GenOffice nhưng VIBE CODE không tìm thấy nó."));
+    core.emit("office:install", .{ .phase = "done", .done = asset.size, .total = asset.size });
+    return status(a);
+}
+
+/// Opens `path` in GenOffice (and puts it on top of the recent list); no path: GenOffice's home.
+fn office_open(c: *ipc.Call, args: struct { path: ?[]const u8 = null }) !void {
+    const a = c.arena;
+    const i = find(a) orelse return c.failMsg(tr("GenOffice is not installed.", "Chưa cài GenOffice."));
+    const path = args.path;
+    if (path) |p| if (!core.isFile(p)) return c.fail("{s} {s}", .{ tr("No file at", "Không có tệp ở"), p });
+    const argv: []const []const u8 = if (core.is_windows)
+        (if (path) |p| &.{ i.app, p } else &.{i.app})
+    else
+        (if (path) |p| &.{ "open", "-a", i.app, p } else &.{ "open", "-a", i.app });
+    _ = std.process.spawn(core.io, .{ .argv = argv, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore }) catch |e|
+        return c.fail("{s} {s}", .{ tr("Could not start GenOffice:", "Không mở được GenOffice:"), @errorName(e) });
+    if (path) |p| try addRecent(a, p, false);
+}
 
 // ---------------- files ----------------
 
-/// What each workspace of the Office tab opens; the first one is what it creates.
-const DOC_EXTS = [_][]const u8{ "docx", "doc", "odt", "rtf" };
-const SHEET_EXTS = [_][]const u8{ "xlsx", "xls", "ods", "csv" };
-const SLIDE_EXTS = [_][]const u8{ "pptx", "ppt", "odp" };
+/// What the Office tab opens.
+const EXTS = [_][]const u8{ "docx", "doc", "odt", "rtf", "xlsx", "xls", "ods", "csv", "pptx", "ppt", "odp", "pdf", "md", "html" };
 
-/// File dialog: pick a file to open, or (`save`) name a new one. `kind` narrows the file types:
-/// "doc", "sheet", "slide" or "pdf" (anything else: every kind the Office tab opens).
-fn office_pick(c: *ipc.Call, a: struct { save: bool, kind: ?[]const u8 = null }) !?[]u8 {
-    const Kind = enum { doc, sheet, slide, pdf };
-    const kind = std.meta.stringToEnum(Kind, a.kind orelse "");
-    // a new file is made in its workspace's own format
-    const doc: []const []const u8 = if (a.save) DOC_EXTS[0..1] else &DOC_EXTS;
-    const sheet: []const []const u8 = if (a.save) SHEET_EXTS[0..1] else &SHEET_EXTS;
-    const slide: []const []const u8 = if (a.save) SLIDE_EXTS[0..1] else &SLIDE_EXTS;
-    const pdf: []const []const u8 = &.{"pdf"};
-    const filter: dialog.Filter = if (kind) |k| switch (k) {
-        .doc => .{ .name = settings.tr("Word document", "Tài liệu Word"), .extensions = doc },
-        .sheet => .{ .name = settings.tr("Spreadsheet", "Bảng tính"), .extensions = sheet },
-        .slide => .{ .name = settings.tr("Presentation", "Bản trình chiếu"), .extensions = slide },
-        .pdf => .{ .name = "PDF", .extensions = pdf },
-    } else .{
-        .name = settings.tr("Documents, spreadsheets, presentations, PDF", "Tài liệu, bảng tính, trình chiếu, PDF"),
-        .extensions = try std.mem.concat(c.arena, []const u8, &.{ doc, sheet, slide, pdf }),
-    };
-    if (!a.save) return dialog.pickFile(c.arena, .{ .filters = &.{filter} });
-    const name = if (kind == .doc)
-        settings.tr("Document.docx", "Tai lieu.docx")
-    else if (kind == .slide)
-        settings.tr("Presentation.pptx", "Trinh chieu.pptx")
-    else
-        settings.tr("Spreadsheet.xlsx", "Bang tinh.xlsx");
-    return dialog.saveFile(c.arena, .{ .filters = &.{filter}, .default_name = name });
-}
-
-/// A file's bytes (an ArrayBuffer on the page).
-fn office_read_file(c: *ipc.Call, a: struct { path: []const u8 }) !ipc.Bytes {
-    const bytes = Dir.cwd().readFileAlloc(core.io, a.path, c.arena, .unlimited) catch |e|
-        return c.fail("{s} {s}: {s}", .{ settings.tr("could not read", "không đọc được"), a.path, @errorName(e) });
-    return .{ .bytes = bytes };
-}
-
-/// Writes a file the editor exported (base64).
-fn office_write_file(c: *ipc.Call, a: struct { path: []const u8, data: []const u8 }) !void {
-    const dec = std.base64.standard.Decoder;
-    const bytes = try c.arena.alloc(u8, try dec.calcSizeForSlice(a.data));
-    try dec.decode(bytes, a.data);
-    Dir.cwd().writeFile(core.io, .{ .sub_path = a.path, .data = bytes }) catch |e| {
-        if (settings.vi()) return c.fail("không lưu được {s} (file đang mở ở chương trình khác?): {s}", .{ a.path, @errorName(e) });
-        return c.fail("could not save {s} (is it open in another program?): {s}", .{ a.path, @errorName(e) });
-    };
-}
-
-/// Copies a file into `<userData>/office-backups` before the Office tab first overwrites it (the
-/// editors don't keep everything a .docx/.xlsx can hold); returns the copy's path. Keeps the newest 200.
-fn office_backup(c: *ipc.Call, a: struct { path: []const u8 }) ![]u8 {
-    var fail: core.Fail = .{};
-    const dir = try core.dataPath(c.arena, &.{"office-backups"});
-    return backup(c.arena, a.path, dir, &fail) catch |e| return c.failMsg(fail.text(e));
-}
-
-fn backup(a: Allocator, path: []const u8, dir: []const u8, fail: *core.Fail) ![]u8 {
-    try core.makePath(dir);
-    const base = std.fs.path.basename(path);
-    const name = try std.fmt.allocPrint(a, "{s} {s}", .{ try stamp(a), if (base.len > 0) base else "file" });
-    const to = try std.fs.path.join(a, &.{ dir, name });
-    Dir.copyFile(Dir.cwd(), path, Dir.cwd(), to, core.io, .{}) catch |e| {
-        if (settings.vi()) return fail.set(a, "không sao lưu được {s}: {s}", .{ path, @errorName(e) });
-        return fail.set(a, "could not back up {s}: {s}", .{ path, @errorName(e) });
-    };
-    var old: std.ArrayList([]const u8) = .empty;
-    var d = try Dir.cwd().openDir(core.io, dir, .{ .iterate = true });
-    defer d.close(core.io);
-    var it = d.iterate();
-    while (it.next(core.io) catch null) |e| try old.append(a, try a.dupe(u8, e.name));
-    if (old.items.len > 200) {
-        // the names start with the time of the copy: the oldest sort first
-        std.mem.sort([]const u8, old.items, {}, struct {
-            fn lt(_: void, x: []const u8, y: []const u8) bool {
-                return std.mem.order(u8, x, y) == .lt;
-            }
-        }.lt);
-        for (old.items[0 .. old.items.len - 200]) |n| d.deleteFile(core.io, n) catch {};
-    }
-    return to;
-}
-
-/// Local time as "20260131-235959".
-fn stamp(a: Allocator) ![]u8 {
-    if (core.is_windows) {
-        const win = core.host.win.c;
-        var t: win.SYSTEMTIME = undefined;
-        win.GetLocalTime(&t);
-        return std.fmt.allocPrint(a, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{ t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond });
-    }
-    // UTC elsewhere
-    const secs: std.time.epoch.EpochSeconds = .{ .secs = core.nowMs() / 1000 };
-    const day = secs.getEpochDay().calculateYearDay();
-    const md = day.calculateMonthDay();
-    const ds = secs.getDaySeconds();
-    return std.fmt.allocPrint(a, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{ day.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() });
+/// File dialog: pick a file to open in GenOffice.
+fn office_pick(c: *ipc.Call) !?[]u8 {
+    const filter: dialog.Filter = .{ .name = tr("Documents, spreadsheets, presentations, PDF", "Tài liệu, bảng tính, trình chiếu, PDF"), .extensions = &EXTS };
+    return dialog.pickFile(c.arena, .{ .filters = &.{filter} });
 }
 
 // ---------------- recent files ----------------
@@ -184,7 +268,7 @@ fn info(path: []const u8) RecentFile {
     return .{ .path = path, .size = st.size, .modified = @intCast(@max(0, st.mtime.toMilliseconds())), .exists = true };
 }
 
-/// Files opened in the Office tab, most recent first, with their size and last change on disk.
+/// Files opened from the Office tab, most recent first, with their size and last change on disk.
 fn office_recent(c: *ipc.Call) ![]RecentFile {
     const paths = recentPaths(c.arena);
     const out = try c.arena.alloc(RecentFile, paths.len);
@@ -192,195 +276,20 @@ fn office_recent(c: *ipc.Call) ![]RecentFile {
     return out;
 }
 
+fn addRecent(a: Allocator, path: []const u8, remove: bool) !void {
+    const cur = recentPaths(a);
+    const list = if (remove) try without(a, cur, path) else try bump(a, cur, path);
+    try core.writeFile(try recentFile(a), try core.toJson(a, list));
+}
+
 /// `remove`: take it off the list; otherwise put it on top.
 fn office_recent_add(c: *ipc.Call, a: struct { path: []const u8, remove: ?bool = null }) !void {
-    const cur = recentPaths(c.arena);
-    const list = if (a.remove orelse false) try without(c.arena, cur, a.path) else try bump(c.arena, cur, a.path);
-    try core.writeFile(try recentFile(c.arena), try core.toJson(c.arena, list));
-}
-
-// ---------------- Claude's tools, run by the page ----------------
-
-pub const Request = struct {
-    id: u64,
-    tool: []const u8,
-    /// JSON text
-    args: []const u8,
-
-    pub fn jsonStringify(r: Request, w: anytype) !void {
-        try w.beginObject();
-        try w.objectField("id");
-        try w.write(r.id);
-        try w.objectField("tool");
-        try w.write(r.tool);
-        try w.objectField("args");
-        try w.beginWriteRaw();
-        try w.writer.writeAll(r.args);
-        w.endWriteRaw();
-        try w.endObject();
-    }
-};
-
-/// Where the page's answer to one call lands; `done` wakes the caller.
-const Answer = struct {
-    done: std.Io.Event = .unset,
-    ok: bool = false,
-    /// owned by `core.gpa`; null until the page answers
-    text: ?[]u8 = null,
-};
-
-var next_id: std.atomic.Value(u64) = .init(1);
-var mutex: core.Mutex = .{};
-/// calls the page has not picked up yet (the Office tab mounts on first use); `args` owned by `core.gpa`
-var pending: std.ArrayList(Request) = .empty;
-var waiting: std.AutoHashMapUnmanaged(u64, *Answer) = .empty;
-
-/// Takes `id` out of `pending` (with `mutex` held).
-fn dropPending(id: u64) void {
-    for (pending.items, 0..) |r, i| {
-        if (r.id == id) {
-            core.gpa.free(r.args);
-            _ = pending.orderedRemove(i);
-            return;
-        }
-    }
-}
-
-/// The calls waiting for the page; it runs each once and answers with `office_reply`.
-fn office_pending(c: *ipc.Call) ![]Request {
-    mutex.lock();
-    defer mutex.unlock();
-    const out = try c.arena.alloc(Request, pending.items.len);
-    for (pending.items, out) |r, *o| o.* = .{ .id = r.id, .tool = r.tool, .args = try c.arena.dupe(u8, r.args) };
-    for (pending.items) |r| core.gpa.free(r.args);
-    pending.clearRetainingCapacity();
-    return out;
-}
-
-fn office_reply(_: *ipc.Call, a: struct { id: u64, ok: bool, text: []const u8 }) !void {
-    mutex.lock();
-    defer mutex.unlock();
-    dropPending(a.id);
-    if (waiting.fetchRemove(a.id)) |kv| {
-        const answer = kv.value;
-        answer.text = try core.gpa.dupe(u8, a.text);
-        answer.ok = a.ok;
-        // the caller cannot leave before it takes `mutex`, which is still held here
-        answer.done.set(core.io);
-    }
-}
-
-pub const INSTRUCTIONS: []const u8 = "Read the files open in VIBE CODE's Office tab — the user sees them there, each in ONLYOFFICE: Word (.docx, .doc, .odt, .rtf), Excel (.xlsx, .xls, .ods, .csv), PowerPoint (.pptx, .ppt, .odp) and PDF. " ++
-    "Several files can be open, one tab each; tools act on the one on screen of their kind unless `file` names another (its path or file name). " ++
-    "Use these tools when the user mentions 'tab Office', 'the document/sheet/slides/PDF', 'tài liệu', 'bảng tính', 'trình chiếu', 'file Word/Excel/PowerPoint/PDF', or what is in them. Start with office_status. " ++
-    "The tools only read: they see what the editor holds now, unsaved edits included. They cannot change a file; the user edits it in the editor, which saves it by itself.";
-
-const file_arg =
-    \\{ "type": "string", "description": "path or file name of an open file (default: the one on screen)" }
-;
-
-const tools_json =
-    \\[
-    \\  {
-    \\    "name": "office_status",
-    \\    "description": "The files open in the Office tab (by kind: Word, Excel, PowerPoint, PDF; the one on screen is marked): path, unsaved changes, read-only.",
-    \\    "inputSchema": { "type": "object", "properties": {} }
-    \\  },
-    \\  {
-    \\    "name": "office_open",
-    \\    "description": "Open a Word, Excel, PowerPoint or PDF file in its own tab of the Office tab and show it (or just show it when it is open already). `create: true` makes a new empty .docx / .xlsx / .pptx at `path`.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": { "path": { "type": "string", "description": "absolute path" }, "create": { "type": "boolean" } },
-    \\      "required": ["path"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "doc_read",
-    \\    "description": "Text of an open Word document: one line per paragraph, table rows as cells joined by \" | \".",
-    \\    "inputSchema": { "type": "object", "properties": { "file":
-++ file_arg ++
-    \\ } }
-    \\  },
-    \\  {
-    \\    "name": "sheet_read",
-    \\    "description": "Cells of one sheet as tab-separated rows, each starting with its row number; the first lines list the workbook's sheets and name the columns. Values are as stored (no number formats: dates are serial numbers); formula cells add ` [=FORMULA]`. Default: the first 200 rows of the sheet on screen. At most 1000 rows per call.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": { "file":
-++ file_arg ++
-    \\, "sheet": { "type": "string", "description": "sheet name (default: the one on screen)" }, "range": { "type": "string", "description": "e.g. \"A1:F100\" or \"A200:Z400\"" } }
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "slide_read",
-    \\    "description": "Text of an open presentation, slide by slide. `slides`: e.g. \"1-5\" or \"3\" (default: the first 20 slides).",
-    \\    "inputSchema": { "type": "object", "properties": { "file":
-++ file_arg ++
-    \\, "slides": { "type": "string" } } }
-    \\  },
-    \\  {
-    \\    "name": "pdf_read",
-    \\    "description": "Text of an open PDF, page by page. `pages`: e.g. \"1-5\" or \"3\" (default: the first 20 pages). Scanned PDFs (images only) have no text.",
-    \\    "inputSchema": { "type": "object", "properties": { "file":
-++ file_arg ++
-    \\, "pages": { "type": "string" } } }
-    \\  }
-    \\]
-;
-
-/// The JSON text of the tools array.
-pub fn tools(a: Allocator) ![]const u8 {
-    _ = a;
-    return tools_json;
-}
-
-const TOOLS = [_][]const u8{ "office_status", "office_open", "doc_read", "sheet_read", "slide_read", "pdf_read" };
-
-/// Hands one call to the page (opening the Office tab if needed) and waits for its answer.
-pub fn callTool(a: Allocator, name: []const u8, args: std.json.Value, fail: *core.Fail) anyerror![]const u8 {
-    var answer: Answer = .{};
-    const req = try enqueue(a, name, args, &answer, fail);
-    core.emit("office:request", .{req});
-    return wait(a, req, &answer, fail);
-}
-
-/// `answer` must stay where it is until `wait` returns.
-fn enqueue(a: Allocator, name: []const u8, args: std.json.Value, answer: *Answer, fail: *core.Fail) !Request {
-    const tool = for (TOOLS) |t| {
-        if (std.mem.eql(u8, t, name)) break t;
-    } else return fail.set(a, "unknown tool {s}", .{name});
-    const req: Request = .{ .id = next_id.fetchAdd(1, .monotonic), .tool = tool, .args = try core.toJson(a, args) };
-    mutex.lock();
-    defer mutex.unlock();
-    try waiting.put(core.gpa, req.id, answer);
-    errdefer _ = waiting.remove(req.id);
-    const kept = try core.gpa.dupe(u8, req.args);
-    errdefer core.gpa.free(kept);
-    try pending.append(core.gpa, .{ .id = req.id, .tool = tool, .args = kept });
-    return req;
-}
-
-fn wait(a: Allocator, req: Request, answer: *Answer, fail: *core.Fail) ![]const u8 {
-    answer.done.waitTimeout(core.io, .{ .duration = .{ .raw = .fromSeconds(120), .clock = .awake } }) catch {};
-    mutex.lock();
-    _ = waiting.remove(req.id);
-    dropPending(req.id);
-    mutex.unlock();
-    const text = answer.text orelse return fail.set(a, "The Office tab did not answer (is VIBE CODE's window open?)", .{});
-    defer core.gpa.free(text);
-    if (!answer.ok) return fail.set(a, "{s}", .{text});
-    return a.dupe(u8, text);
+    try addRecent(c.arena, a.path, a.remove orelse false);
 }
 
 // ---------------- tests ----------------
 
 const testing = std.testing;
-
-fn testInit() void {
-    core.gpa = testing.allocator;
-    core.io = testing.io;
-}
 
 test "recent list moves a file to the top once" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -397,8 +306,9 @@ test "recent list moves a file to the top once" {
     try testing.expectEqual(1, (try without(a, l, "C:/A.XLSX")).len);
 }
 
-test "backup copies the file aside" {
-    testInit();
+test "an install is found from its folders" {
+    core.gpa = testing.allocator;
+    core.io = testing.io;
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -406,83 +316,29 @@ test "backup copies the file aside" {
     defer tmp.cleanup();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const dir = buf[0..try tmp.dir.realPath(testing.io, &buf)];
-    const src = try std.fs.path.join(a, &.{ dir, "Báo cáo.docx" });
-    try core.writeFile(src, "original");
-    var fail: core.Fail = .{};
-    const to = try backup(a, src, try std.fs.path.join(a, &.{ dir, "bk" }), &fail);
-    try testing.expect(std.mem.endsWith(u8, to, " Báo cáo.docx"));
-    // "<dir>\bk\20260131-235959 Báo cáo.docx"
-    const name = std.fs.path.basename(to);
-    try testing.expectEqual(15 + " Báo cáo.docx".len, name.len);
-    try testing.expectEqual('-', name[8]);
-    try testing.expectEqualStrings("original", try core.readFileAlloc(a, to, 1 << 20));
-    try testing.expect(info(to).exists and info(to).size == 8 and info(to).modified > 0);
-    try testing.expect(!info(src[0 .. src.len - 1]).exists);
+    const app = try std.fs.path.join(a, &.{ dir, "GenOffice.exe" });
+    const cli = try std.fs.path.join(a, &.{ dir, "resources", "cli" });
+    try testing.expect(found(a, app, cli) == null);
+    try core.makePath(cli);
+    try core.writeFile(app, "");
+    try core.writeFile(try std.fs.path.join(a, &.{ cli, if (core.is_windows) "genoffice.cjs" else "genoffice" }), "");
+    if (core.is_windows) try testing.expectEqualStrings(app, found(a, app, cli).?.app);
 }
 
-test "every listed tool is accepted" {
+test "GenOffice installed on this machine (GENOFFICE_TEST=1)" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const listed = try std.json.parseFromSliceLeaky(std.json.Value, a, try tools(a), .{});
-    try testing.expectEqual(TOOLS.len, listed.array.items.len);
-    for (listed.array.items, TOOLS) |t, name| {
-        try testing.expectEqualStrings(name, t.object.get("name").?.string);
-        try testing.expect(t.object.get("description").?.string.len > 0);
-        try testing.expectEqualStrings("object", t.object.get("inputSchema").?.object.get("type").?.string);
-    }
-    const file = listed.array.items[3].object.get("inputSchema").?.object.get("properties").?.object.get("file").?;
-    try testing.expectEqualStrings("string", file.object.get("type").?.string);
-}
-
-test "tool calls wait for the page" {
-    testInit();
-    defer {
-        pending.clearAndFree(core.gpa);
-        waiting.clearAndFree(core.gpa);
-    }
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var call: ipc.Call = .{ .arena = a, .cmd = "", .body = "", .headers = &.{}, .webview = "main" };
-    var fail: core.Fail = .{};
-
-    const Caller = struct {
-        req: Request,
-        answer: Answer = .{},
-        fail: core.Fail = .{},
-        arena: std.heap.ArenaAllocator = .init(testing.allocator),
-        result: anyerror![]const u8 = error.Unexpected,
-        fn run(s: *@This()) void {
-            s.result = wait(s.arena.allocator(), s.req, &s.answer, &s.fail);
-        }
-    };
-    var caller: Caller = .{ .req = undefined };
-    defer caller.arena.deinit();
-    caller.req = try enqueue(a, "sheet_read", try std.json.parseFromSliceLeaky(std.json.Value, a, "{\"range\":\"A1:B2\"}", .{}), &caller.answer, &fail);
-    const id = caller.req.id;
-    const thread = try std.Thread.spawn(.{}, Caller.run, .{&caller});
-    // the page (mounted late) picks it up from the queue, then answers
-    const picked = try office_pending(&call);
-    try testing.expectEqual(1, picked.len);
-    try testing.expectEqual(id, picked[0].id);
-    try testing.expectEqualStrings("sheet_read", picked[0].tool);
-    try testing.expectEqualStrings(
-        try std.fmt.allocPrint(a, "[{{\"id\":{d},\"tool\":\"sheet_read\",\"args\":{{\"range\":\"A1:B2\"}}}}]", .{id}),
-        try core.toJson(a, picked),
-    );
-    try testing.expectEqual(0, (try office_pending(&call)).len);
-    try office_reply(&call, .{ .id = id, .ok = true, .text = "ok from page" });
-    thread.join();
-    try testing.expectEqualStrings("ok from page", try caller.result);
-
-    var answer: Answer = .{};
-    const req = try enqueue(a, "pdf_read", .{ .object = .empty }, &answer, &fail);
-    try office_reply(&call, .{ .id = req.id, .ok = false, .text = "still opening" });
-    try testing.expectError(error.Failed, wait(a, req, &answer, &fail));
-    try testing.expectEqualStrings("still opening", fail.msg);
-    try testing.expectEqual(0, pending.items.len);
-    try testing.expectError(error.Failed, enqueue(a, "sheet_write", .null, &answer, &fail));
-    try testing.expectEqualStrings("unknown tool sheet_write", fail.msg);
-    try testing.expectError(error.Failed, enqueue(a, "rm_rf", .null, &answer, &fail));
+    _ = testing.environ.getAlloc(a, "GENOFFICE_TEST") catch return error.SkipZigTest;
+    core.gpa = std.heap.smp_allocator;
+    core.io = testing.io;
+    var env = try testing.environ.createMap(a);
+    const saved = core.env;
+    core.env = &env;
+    defer core.env = saved;
+    const i = find(a) orelse return error.TestUnexpectedResult;
+    std.debug.print("GenOffice: {s} | cli {s}\n", .{ i.app, i.cli });
+    const l = mcpLaunch(a).?;
+    std.debug.print("mcp: {s} {s} {s} ({s}={s})\n", .{ l.command, l.args[0], l.args[1], l.env_name, l.env_value });
+    try testing.expect(std.mem.endsWith(u8, l.args[0], "genoffice.cjs"));
 }

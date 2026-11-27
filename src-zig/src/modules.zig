@@ -35,7 +35,6 @@ pub const dbx = if (enabled("dbx")) @import("dbx.zig") else struct {};
 pub const desktop = if (enabled("desktop")) @import("desktop.zig") else struct {};
 pub const gmail = if (enabled("gmail")) @import("gmail.zig") else struct {};
 pub const office = if (enabled("office")) @import("office.zig") else struct {};
-pub const onlyoffice = if (enabled("onlyoffice")) @import("onlyoffice.zig") else struct {};
 pub const zalo = if (enabled("zalo/zalo")) @import("zalo/zalo.zig") else struct {};
 pub const zalo_tasks = if (enabled("zalo_tasks")) @import("zalo_tasks.zig") else struct {};
 pub const toast = if (enabled("toast")) @import("toast.zig") else struct {};
@@ -51,6 +50,6 @@ pub const remote = if (enabled("remote")) @import("remote.zig") else struct {};
 pub const all = .{
     hostcmds, settings, secure,     appcmds,    windowing,  pty,   plugins, mcp,
     browser,  adblock,  extensions, webdata,    sessions,   dbx,   desktop, gmail,
-    office,   onlyoffice, zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
+    office,   zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
     git,      thermal, audio, remote,
 };

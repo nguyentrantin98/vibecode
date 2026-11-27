@@ -783,7 +783,7 @@ export async function newChatFromMail(uid: number, subject: string, projectCwd?:
   })
 }
 
-/** Office tab "Giao cho AI": a new chat that works on an open document / spreadsheet / PDF through the vibe-office tools. */
+/** Office tab "Giao cho AI": a new chat that works on a document / spreadsheet / presentation / PDF through GenOffice's tools. */
 export async function newChatFromOfficeFile(path: string): Promise<void> {
   const cwd = st().root ?? (await window.api.app.pickFolder())
   if (!cwd) return
@@ -798,8 +798,8 @@ export async function newChatFromOfficeFile(path: string): Promise<void> {
     title: name.slice(0, 60),
     pinnedTitle: true,
     draft: tr(
-      `Use the vibe-office tools to work with the file open in the Office tab (${path}). `,
-      `Dùng các công cụ vibe-office để làm việc với tệp đang mở trong tab Office (${path}). `
+      `Use the genoffice tools to work with the file ${path}. `,
+      `Dùng các công cụ genoffice để làm việc với tệp ${path}. `
     )
   })
 }
@@ -1014,24 +1014,10 @@ export function openFile(path: string): void {
   pushTab({ id: 'f:' + path.toLowerCase(), kind: 'file', path, title: basename(path), dirty: false })
 }
 
-/* Opening a .docx / .xlsx / .csv / .pdf in the Office tab from elsewhere (Source code › This PC).
-   The Office tab mounts on its first visit: paths asked for before it's ready wait here. */
-let officeOpener: ((path: string) => void) | null = null
-const officeWaiting: string[] = []
-
+/** A .docx / .xlsx / .pptx / .pdf from elsewhere (Source code › This PC) opens in GenOffice; while
+ *  GenOffice is not installed, the Office tab shows how to get it. */
 export function openInOffice(path: string): void {
-  useStore.setState({ centerView: 'office' })
-  if (officeOpener) officeOpener(path)
-  else officeWaiting.push(path)
-}
-
-/** The Office tab says how it opens files; returns the undo. */
-export function setOfficeOpener(fn: (path: string) => void): () => void {
-  officeOpener = fn
-  officeWaiting.splice(0).forEach(fn)
-  return () => {
-    if (officeOpener === fn) officeOpener = null
-  }
+  window.api.office.open(path).catch(() => useStore.setState({ centerView: 'office' }))
 }
 
 /* Showing a file or folder in Source code › This PC from elsewhere (a path clicked in a terminal, a

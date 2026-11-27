@@ -1,4 +1,4 @@
-/* ================= Office tab: home + Word / Excel / PowerPoint / PDF ================= */
+/* ================= Office tab: GenOffice (install, open, recent files) ================= */
 
 .center-pane.office-host { flex-direction: row; }
 
@@ -27,21 +27,10 @@
 .of-ic-pdf { color: var(--of-pdf); }
 .of-ic-slide { color: var(--of-slide); }
 
-/* ---------------- shell: rail + main ---------------- */
-
-.of-rail { width: 76px; flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 6px; background: var(--bg-1); border-right: 1px solid var(--border); }
-.of-rail button { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 2px 7px; border-radius: 10px; color: var(--text-dim); font-size: 11px; }
-.of-rail button:hover { background: var(--w-06); color: var(--text); }
-.of-rail button.on { background: var(--w-0a); color: var(--text); font-weight: 600; }
-.of-rail-count { position: absolute; top: 4px; right: 10px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font: 700 10px/16px inherit; font-style: normal; }
-.of-main { flex: 1; min-width: 0; min-height: 0; position: relative; }
-/* every workspace stays laid out (editors keep their size); only the shown one is visible */
-.of-ws { position: absolute; inset: 0; display: flex; flex-direction: column; visibility: hidden; pointer-events: none; }
-.of-ws.on { visibility: visible; pointer-events: auto; }
 
 /* ---------------- home ---------------- */
 
-.of-home { position: absolute; inset: 0; z-index: 2; overflow: auto; padding: 22px 28px; background: var(--bg-2); display: flex; flex-direction: column; gap: 14px; }
+.of-home { flex: 1; min-width: 0; overflow: auto; padding: 22px 28px; background: var(--bg-2); display: flex; flex-direction: column; gap: 14px; }
 .of-home-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .of-open, .of-action { height: 38px; padding: 0 16px; border-radius: 8px; display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
 .of-open { background: var(--of-pdf); color: #fff; }
@@ -62,26 +51,10 @@
 .of-recent-name em { font-style: normal; font-size: 11.5px; color: var(--of-red); white-space: nowrap; }
 .of-recent-row.gone { cursor: default; opacity: 0.55; }
 
-/* ---------------- file tabs (each workspace) ---------------- */
+/* the recent list's remove button */
 
-.of-files { display: flex; align-items: center; gap: 2px; padding: 6px 8px 0; background: var(--bg-1); border-bottom: 1px solid var(--border); overflow-x: auto; flex: 0 0 auto; }
-.of-filetab { display: flex; align-items: center; gap: 7px; height: 32px; max-width: 240px; padding: 0 6px 0 12px; border-radius: 8px 8px 0 0; font-size: 12.5px; color: var(--text-dim); cursor: pointer; flex: 0 0 auto; border: 1px solid transparent; border-bottom: 0; }
-.of-filetab:hover { background: var(--w-06); color: var(--text); }
-.of-filetab.on { background: var(--bg-2); color: var(--text); border-color: var(--border); margin-bottom: -1px; height: 33px; }
-.of-filetab > svg { flex: 0 0 auto; }
-.of-filename { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .of-fileclose { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; color: var(--text-faint); flex: 0 0 auto; }
 .of-fileclose:hover { background: var(--w-0a); color: var(--text); }
-.of-addfile { padding: 0 8px; margin-left: 2px; }
-.of-save { display: inline-flex; align-items: center; gap: 5px; margin: 0 6px 4px; font-size: 12px; color: var(--text-dim); white-space: nowrap; align-self: center; }
-.of-save.ok { color: var(--of-green); }
-.of-save.err { color: var(--of-red); font-weight: 600; }
-.of-files > .of-tool { align-self: center; margin-bottom: 4px; }
-.of-dirty { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
-.of-tool { height: 28px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; color: var(--text-2); font-size: 12.5px; flex: 0 0 auto; }
-.of-tool:hover:not(:disabled) { background: var(--w-0a); color: var(--text); }
-.of-tool:disabled { opacity: 0.45; }
-.of-tool.of-ai { color: var(--accent); }
 
 /* toolbar button (the home page's refresh) */
 .of-tb { height: 28px; min-width: 28px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; gap: 3px; border-radius: 6px; color: #3a3a3a; font-size: 12.5px; flex: 0 0 auto; }
@@ -89,11 +62,8 @@
 .of-tb.on { background: #3b82f624; color: #1d4ed8; }
 .of-tb:disabled { opacity: 0.35; }
 
-/* ---------------- ONLYOFFICE: one editor iframe per open file ---------------- */
-
-.of-oo { position: relative; flex: 1; min-height: 0; background: var(--bg-2); }
-.of-oo iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; visibility: hidden; }
-/* a visible child would show through the hidden workspace: only the shown one's */
-.of-ws.on .of-oo iframe.on { visibility: visible; }
-.of-oo-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: var(--bg-2); }
-.of-oo-state progress { width: min(360px, 80%); accent-color: var(--of-slide); }
+/* GenOffice not installed yet */
+.of-gen { display: flex; flex-direction: column; gap: 12px; max-width: 760px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-1); }
+.of-gen h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.of-progress { display: flex; align-items: center; gap: 10px; }
+.of-progress progress { width: min(360px, 60%); accent-color: var(--of-slide); }

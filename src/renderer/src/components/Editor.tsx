@@ -91,8 +91,6 @@ export function EditorArea(): React.JSX.Element {
     if (view === 'gmail') setGmailSeen(true)
     if (view === 'office') setOfficeSeen(true)
   }, [view])
-  // Claude's sheet tools run in the Office tab: mount it (it picks the waiting call up) without showing it
-  useEffect(() => window.api.office.onRequest(() => setOfficeSeen(true)), [])
   // switching chats while on Web: give that chat its own browser (before paint: no empty frame)
   useLayoutEffect(() => {
     if (view === 'web' && !browsers[key]) openBrowser()

@@ -17,7 +17,6 @@ const http = @import("http.zig");
 const settings = @import("settings.zig");
 const browser = @import("browser.zig");
 const adblock = @import("adblock.zig");
-const onlyoffice = @import("onlyoffice.zig");
 const J = @import("browser_json.zig");
 const m = @import("modules.zig");
 const Allocator = std.mem.Allocator;
@@ -236,9 +235,29 @@ fn ensureRunning(a: Allocator, fail: *core.Fail) !Running {
     return r;
 }
 
+extern "iphlpapi" fn GetExtendedTcpTable(table: ?*anyopaque, size: *u32, order: c_int, af: u32, class: c_int, reserved: u32) callconv(.winapi) u32;
+
+/// Some program already listens on this TCP port. std binds a listening socket as shared on
+/// Windows (as with SO_REUSEADDR), so binding a taken port succeeds and the two programs then
+/// answer each other's connections: it has to be looked up instead.
+fn portTaken(port: u16) bool {
+    // MIB_TCPTABLE of the IPv4 listeners: a count, then rows of 5 DWORDs (state, local address,
+    // local port in network byte order, remote address, remote port)
+    var table: [64 * 1024]u8 align(4) = undefined;
+    var size: u32 = table.len;
+    const af_inet = 2;
+    const tcp_table_basic_listener = 0;
+    if (GetExtendedTcpTable(&table, &size, 0, af_inet, tcp_table_basic_listener, 0) != 0) return false;
+    const rows = std.mem.readInt(u32, table[0..4], .little);
+    for (0..rows) |i| {
+        if (std.mem.readInt(u16, table[4 + i * 20 + 8 ..][0..2], .big) == port) return true;
+    }
+    return false;
+}
+
 /// A free port on 127.0.0.1 when `PORT` is taken.
 fn pickPort() !u16 {
-    if (!onlyoffice.portTaken(PORT)) return PORT;
+    if (!portTaken(PORT)) return PORT;
     var address: std.Io.net.IpAddress = .{ .ip4 = .loopback(0) };
     var l = try address.listen(core.io, .{});
     defer l.deinit(core.io);
