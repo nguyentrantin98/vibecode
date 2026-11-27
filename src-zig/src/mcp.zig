@@ -1,14 +1,13 @@
 //! The app's tools for Claude, as MCP servers over HTTP on localhost (like Claude desktop's).
 //!
-//! Every `claude` chat is launched with `--mcp-config <file>` naming three servers:
+//! Every `claude` chat is launched with `--mcp-config <file>` naming four servers:
 //!   vibe-browser  http://127.0.0.1:<port>/mcp/<chatId>   — that chat's own Web tab
 //!   vibe-dbx      http://127.0.0.1:<port>/db/<chatId>    — the databases connected in DBX (dbX tab)
 //!   vibe-zalo     http://127.0.0.1:<port>/zalo/<chatId>  — the personal Zalo account
+//!   vibe-office   http://127.0.0.1:<port>/office/<chatId> — the files open in the Office tab (docs, sheets, PDFs)
 //! and one more once the user turns Desktop control on for the chat:
 //!   vibe-desktop  http://127.0.0.1:<port>/desktop/<chatId> — the other apps on the Windows desktop
 //! Streamable HTTP transport with plain JSON replies (no SSE), guarded by a per-launch token.
-//! When GenOffice is installed (the Office tab, office.zig), its own stdio server comes along too:
-//!   genoffice     `genoffice mcp` — read, create and edit .docx / .xlsx / .pptx / .pdf files
 
 const std = @import("std");
 const core = @import("core.zig");
@@ -24,8 +23,7 @@ const BROWSER = "vibe-browser";
 const DB = "vibe-dbx";
 const ZALO = "vibe-zalo";
 const DESKTOP = "vibe-desktop";
-/// GenOffice's own server (not served here)
-const GENOFFICE = "genoffice";
+const OFFICE = "vibe-office";
 
 var port: std.atomic.Value(u16) = .init(0);
 
@@ -124,7 +122,7 @@ fn authorized(header: ?[]const u8, tok: []const u8) bool {
 }
 
 fn isKind(kind: []const u8) bool {
-    for ([_][]const u8{ "mcp", "db", "zalo", "desktop" }) |k| if (std.mem.eql(u8, k, kind)) return true;
+    for ([_][]const u8{ "mcp", "db", "zalo", "office", "desktop" }) |k| if (std.mem.eql(u8, k, kind)) return true;
     return false;
 }
 
@@ -152,8 +150,7 @@ pub fn configFor(a: Allocator, chat: []const u8) ?[]u8 {
     const name = std.mem.concat(a, u8, &.{ fileName(a, chat) catch return null, ".json" }) catch return null;
     const file = core.dataPath(a, &.{ "mcp", name }) catch return null;
     const desktop = @hasDecl(m.desktop, "enabled") and m.desktop.enabled(chat);
-    const office: ?Stdio = if (@hasDecl(m.office, "mcpLaunch")) (if (m.office.mcpLaunch(a)) |l| Stdio{ .command = l.command, .args = l.args, .env_name = l.env_name, .env_value = l.env_value } else null) else null;
-    core.writeFile(file, configJson(a, p, token(), chat, desktop, office) catch return null) catch return null;
+    core.writeFile(file, configJson(a, p, token(), chat, desktop) catch return null) catch return null;
     return file;
 }
 
@@ -169,16 +166,7 @@ fn fileName(a: Allocator, chat: []const u8) ![]u8 {
     return out.toOwnedSlice(a);
 }
 
-/// A server Claude starts itself (stdio).
-const Stdio = struct {
-    command: []const u8,
-    args: []const []const u8,
-    /// one environment variable, when `env_name` is not empty
-    env_name: []const u8 = "",
-    env_value: []const u8 = "",
-};
-
-fn configJson(a: Allocator, p: u16, tok: []const u8, chat: []const u8, desktop: bool, office: ?Stdio) ![]u8 {
+fn configJson(a: Allocator, p: u16, tok: []const u8, chat: []const u8, desktop: bool) ![]u8 {
     const chat_enc = try http.encodeQuery(a, chat);
     const bearer = try std.fmt.allocPrint(a, "Bearer {s}", .{tok});
     var aw: std.Io.Writer.Allocating = .init(a);
@@ -190,6 +178,7 @@ fn configJson(a: Allocator, p: u16, tok: []const u8, chat: []const u8, desktop: 
         .{ .name = BROWSER, .kind = "mcp" },
         .{ .name = DB, .kind = "db" },
         .{ .name = ZALO, .kind = "zalo" },
+        .{ .name = OFFICE, .kind = "office" },
         .{ .name = DESKTOP, .kind = "desktop" },
     };
     for (servers) |s| {
@@ -200,24 +189,6 @@ fn configJson(a: Allocator, p: u16, tok: []const u8, chat: []const u8, desktop: 
             .url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/{s}/{s}", .{ p, s.kind, chat_enc }),
             .headers = .{ .Authorization = bearer },
         });
-    }
-    if (office) |o| {
-        try w.objectField(GENOFFICE);
-        try w.beginObject();
-        try w.objectField("type");
-        try w.write("stdio");
-        try w.objectField("command");
-        try w.write(o.command);
-        try w.objectField("args");
-        try w.write(o.args);
-        if (o.env_name.len > 0) {
-            try w.objectField("env");
-            try w.beginObject();
-            try w.objectField(o.env_name);
-            try w.write(o.env_value);
-            try w.endObject();
-        }
-        try w.endObject();
     }
     try w.endObject();
     try w.endObject();
@@ -248,6 +219,7 @@ fn instructionsOf(comptime mod: type) []const u8 {
 fn serverOf(kind: []const u8) Server {
     if (std.mem.eql(u8, kind, "db")) return .{ .name = DB, .instructions = instructionsOf(m.dbx) };
     if (std.mem.eql(u8, kind, "zalo")) return .{ .name = ZALO, .instructions = instructionsOf(m.zalo) };
+    if (std.mem.eql(u8, kind, "office")) return .{ .name = OFFICE, .instructions = instructionsOf(m.office) };
     if (std.mem.eql(u8, kind, "desktop")) return .{ .name = DESKTOP, .instructions = instructionsOf(m.desktop) };
     return .{ .name = BROWSER, .instructions = BROWSER_INSTRUCTIONS };
 }
@@ -294,6 +266,8 @@ fn handle(a: Allocator, kind: []const u8, chat: []const u8, method: []const u8, 
             try dbxTools(a)
         else if (is(kind, "zalo"))
             try toolsOf(m.zalo, a)
+        else if (is(kind, "office"))
+            try toolsOf(m.office, a)
         else if (is(kind, "desktop"))
             try toolsOf(m.desktop, a)
         else
@@ -316,6 +290,8 @@ fn handle(a: Allocator, kind: []const u8, chat: []const u8, method: []const u8, 
         var fail: core.Fail = .{};
         const result: anyerror![]const u8 = if (is(kind, "zalo"))
             textTool(m.zalo, a, tool, args, &fail)
+        else if (is(kind, "office"))
+            textTool(m.office, a, tool, args, &fail)
         else if (is(kind, "desktop"))
             (if (@hasDecl(m.desktop, "callTool")) m.desktop.callTool(a, chat, tool, args, &fail) else fail.set(a, not_available, .{}))
         else
@@ -973,7 +949,7 @@ test "routes" {
     try std.testing.expectEqualStrings("nope", parseTarget(a, "/nope/c").?.kind);
     for ([_][]const u8{ "/", "/mcp", "/mcp/", "//chat", "/mcp/chat/", "/mcp/chat/more", "mcp/chat", "", "*" }) |bad|
         try std.testing.expect(parseTarget(a, bad) == null);
-    try std.testing.expect(isKind("mcp") and isKind("db") and isKind("zalo") and isKind("desktop") and !isKind("office"));
+    try std.testing.expect(isKind("mcp") and isKind("db") and isKind("zalo") and isKind("office") and isKind("desktop"));
     try std.testing.expect(!isKind("nope") and !isKind("") and !isKind("MCP"));
     try std.testing.expect(authorized("Bearer abc", "abc"));
     try std.testing.expect(!authorized("Bearer abcd", "abc"));
@@ -989,33 +965,21 @@ test "the config file of a chat" {
     try std.testing.expectEqualStrings("a1b2-c3_d4", try fileName(a, "a1b2-c3_d4"));
     try std.testing.expectEqualStrings("chat_1__x_", try fileName(a, "chat 1/đx."));
 
-    const v = J.parse(a, try configJson(a, 4321, "tok", "chat 1/é", false, null)).?;
+    const v = J.parse(a, try configJson(a, 4321, "tok", "chat 1/é", false)).?;
     const servers = J.get(v, "mcpServers").?.object;
-    try std.testing.expectEqual(@as(usize, 3), servers.count());
+    try std.testing.expectEqual(@as(usize, 4), servers.count());
     try std.testing.expectEqualStrings("http", J.str(J.path(v, &.{ "mcpServers", "vibe-browser", "type" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/mcp/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-browser", "url" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/db/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-dbx", "url" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/zalo/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-zalo", "url" })).?);
-    try std.testing.expectEqualStrings("Bearer tok", J.str(J.path(v, &.{ "mcpServers", "vibe-zalo", "headers", "Authorization" })).?);
-    try std.testing.expect(J.path(v, &.{ "mcpServers", "genoffice" }) == null);
+    try std.testing.expectEqualStrings("http://127.0.0.1:4321/office/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-office", "url" })).?);
+    try std.testing.expectEqualStrings("Bearer tok", J.str(J.path(v, &.{ "mcpServers", "vibe-office", "headers", "Authorization" })).?);
     try std.testing.expect(J.path(v, &.{ "mcpServers", "vibe-desktop" }) == null);
     // the URL the config names is the route the server reads back
     try std.testing.expectEqualStrings("chat 1/é", parseTarget(a, "/mcp/chat%201%2F%C3%A9").?.chat);
 
-    const with = J.parse(a, try configJson(a, 4321, "tok", "c", true, null)).?;
+    const with = J.parse(a, try configJson(a, 4321, "tok", "c", true)).?;
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/desktop/c", J.str(J.path(with, &.{ "mcpServers", "vibe-desktop", "url" })).?);
-
-    // GenOffice installed: its stdio server, started as Node by GenOffice.exe
-    const office = J.parse(a, try configJson(a, 4321, "tok", "c", false, .{
-        .command = "C:\\GenOffice\\GenOffice.exe",
-        .args = &.{ "C:\\GenOffice\\resources\\cli\\genoffice.cjs", "mcp" },
-        .env_name = "ELECTRON_RUN_AS_NODE",
-        .env_value = "1",
-    })).?;
-    try std.testing.expectEqualStrings("stdio", J.str(J.path(office, &.{ "mcpServers", "genoffice", "type" })).?);
-    try std.testing.expectEqualStrings("C:\\GenOffice\\GenOffice.exe", J.str(J.path(office, &.{ "mcpServers", "genoffice", "command" })).?);
-    try std.testing.expectEqualStrings("mcp", J.str(J.path(office, &.{ "mcpServers", "genoffice", "args" }).?.array.items[1]).?);
-    try std.testing.expectEqualStrings("1", J.str(J.path(office, &.{ "mcpServers", "genoffice", "env", "ELECTRON_RUN_AS_NODE" })).?);
 }
 
 test "JSON-RPC" {
@@ -1037,7 +1001,7 @@ test "JSON-RPC" {
     try std.testing.expectEqualStrings("x-1", J.str(J.get(db, "id")).?);
     try std.testing.expectEqualStrings("2025-06-18", J.str(J.path(db, &.{ "result", "protocolVersion" })).?);
     try std.testing.expectEqualStrings(DB, J.str(J.path(db, &.{ "result", "serverInfo", "name" })).?);
-    inline for (.{ .{ "zalo", ZALO }, .{ "desktop", DESKTOP } }) |kv| {
+    inline for (.{ .{ "zalo", ZALO }, .{ "office", OFFICE }, .{ "desktop", DESKTOP } }) |kv| {
         const v = J.parse(a, (try onPost(a, kv[0], "c", "{\"id\":2,\"method\":\"initialize\"}")).?).?;
         try std.testing.expectEqualStrings(kv[1], J.str(J.path(v, &.{ "result", "serverInfo", "name" })).?);
     }

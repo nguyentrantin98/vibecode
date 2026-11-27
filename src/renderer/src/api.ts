@@ -28,7 +28,7 @@ import type {
   MailSummary,
   ProjectGroup,
   RemoteState,
-  OfficeStatus,
+  OfficeRequest,
   PtySpawnOptions,
   RecentFile,
   UsageLimit,
@@ -215,21 +215,32 @@ export const api = {
     read: (uid: number): Promise<MailBody> => invoke('gmail_read', { uid }),
     taskContext: (uid: number): Promise<{ file: string; files: string[] }> => invoke('gmail_task_context', { uid })
   },
-  /** Office tab → GenOffice, the separate app files open in (src-zig/src/office.zig) */
   office: {
-    /** file dialog: a document, spreadsheet, presentation or PDF to open */
-    pick: (): Promise<string | null> => invoke('office_pick'),
-    /** files opened from the Office tab, most recent first, as they are on disk */
+    /** file dialog: pick a file to open, or (save) name a new one; `kind` narrows the file types */
+    pick: (save: boolean, kind?: 'doc' | 'sheet' | 'slide' | 'pdf'): Promise<string | null> => invoke('office_pick', { save, kind }),
+    /** a file's bytes (.docx, .xlsx, .pptx, .pdf…) */
+    readFile: (path: string): Promise<ArrayBuffer> => invoke('office_read_file', { path }),
+    /** `data`: the file's bytes, base64 */
+    writeFile: (path: string, data: string): Promise<void> => invoke('office_write_file', { path, data }),
+    /** files opened in the Office tab, most recent first, as they are on disk */
     recent: (): Promise<RecentFile[]> => invoke('office_recent'),
     /** put a file on top of the recent list (`remove`: take it off) */
     recentAdd: (path: string, remove?: boolean): Promise<void> => invoke('office_recent_add', { path, remove }),
-    /** is GenOffice installed (and where) */
-    status: (): Promise<OfficeStatus> => invoke('office_status'),
-    /** downloads GenOffice's installer and runs it (Windows); `onInstall` reports the progress */
-    install: (): Promise<OfficeStatus> => invoke('office_install'),
-    onInstall: (cb: (p: { phase: 'download' | 'install' | 'done'; done: number; total: number }) => void): Off => on('office:install', cb),
-    /** open a file in GenOffice (no path: its home screen) */
-    open: (path?: string): Promise<void> => invoke('office_open', { path })
+    /** copy a file to the app's backup folder before it is first overwritten; the copy's path */
+    backup: (path: string): Promise<string> => invoke('office_backup', { path }),
+    /** Claude's tool calls not picked up yet (sent before the tab was mounted) */
+    pending: (): Promise<OfficeRequest[]> => invoke('office_pending'),
+    reply: (id: number, ok: boolean, text: string): Promise<void> => invoke('office_reply', { id, ok, text }),
+    onRequest: (cb: (req: OfficeRequest) => void): Off => on('office:request', cb)
+  },
+  onlyoffice: {
+    /** where the ONLYOFFICE editor is served (http://127.0.0.1:<port>), null until it is downloaded */
+    origin: (): Promise<string | null> => invoke('onlyoffice_origin'),
+    /** downloads it (once) and serves it; its origin */
+    install: (): Promise<string> => invoke('onlyoffice_install'),
+    /** bytes of the one-time download */
+    downloadSize: (): Promise<number> => invoke('onlyoffice_download_size'),
+    onProgress: (cb: (done: number, total: number) => void): Off => on('onlyoffice:progress', cb)
   },
   zalo: {
     state: (): Promise<ZaloState> => invoke('zalo_state'),

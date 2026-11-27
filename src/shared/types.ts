@@ -225,17 +225,13 @@ export interface MailBody {
   attachments: string[]
 }
 
-/* ---------------- Office tab → GenOffice ---------------- */
+/* ---------------- Office tab → Sheet (+ Claude's sheet tools) ---------------- */
 
-/** GenOffice on this machine */
-export interface OfficeStatus {
-  installed: boolean
-  /** GenOffice.exe / GenOffice.app */
-  app: string | null
-  /** VIBE CODE can install it here (Windows); elsewhere the user downloads it */
-  can_install: boolean
-  /** an install is running */
-  installing: boolean
+/** one of Claude's vibe-office tool calls, for the Office tab to run on what it shows */
+export interface OfficeRequest {
+  id: number
+  tool: 'office_status' | 'office_open' | 'doc_read' | 'sheet_read' | 'slide_read' | 'pdf_read'
+  args: Record<string, unknown>
 }
 
 /** a file on the Office tab's "recent" list, as it is on disk now */

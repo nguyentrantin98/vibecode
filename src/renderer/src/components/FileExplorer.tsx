@@ -542,7 +542,7 @@ export function FileExplorerPane(): React.JSX.Element {
     const many = list.length > 1
     openMenu(ev, [
       !many && { label: tr('Open', 'Mở'), icon: <FolderOpen size={14} />, hint: 'Enter', action: () => openEntry(e) },
-      !many && !e.isDir && OFFICE_RE.test(e.name) && { label: tr('Open in GenOffice', 'Mở bằng GenOffice'), icon: <FileSpreadsheet size={14} />, action: () => openInOffice(e.path) },
+      !many && !e.isDir && OFFICE_RE.test(e.name) && { label: tr('Open in Office tab', 'Mở trong tab Office'), icon: <FileSpreadsheet size={14} />, action: () => openInOffice(e.path) },
       !many && !e.isDir && { label: tr('Open in Source code', 'Mở trong Mã nguồn'), icon: <FileCode2 size={14} />, action: () => openFile(e.path) },
       !many && { label: tr('Open with Windows app', 'Mở bằng ứng dụng Windows'), icon: <ExternalLink size={14} />, action: () => openExternally(e.path) },
       !many && { label: tr('Show in Windows Explorer', 'Hiện trong Windows Explorer'), icon: <FolderOpen size={14} />, action: () => window.api.fs.reveal(e.path) },
@@ -1425,7 +1425,7 @@ function Preview({
       </div>
       <div className="fx-preview-actions">
         <button className="btn btn-sm btn-primary" onClick={() => onOpen(entry)}>
-          {entry.isDir ? tt('Open folder', 'Mở thư mục') : office ? tt('Open in GenOffice', 'Mở bằng GenOffice') : tt('Open', 'Mở')}
+          {entry.isDir ? tt('Open folder', 'Mở thư mục') : office ? tt('Open in Office', 'Mở trong Office') : tt('Open', 'Mở')}
         </button>
         {!entry.isDir && (
           <button className="icon-btn" title={tt('Open with its Windows app', 'Mở bằng ứng dụng Windows của nó')} onClick={() => onExternal(entry.path)}>
@@ -1460,7 +1460,7 @@ function Preview({
         {(shown.kind === 'binary' || shown.kind === 'big' || (shown.kind === 'none' && !entry.isDir)) && (
           <div className="fx-preview-none">
             {office ? (
-              <span>{tt('Opens in GenOffice (the Office tab), where you can read and edit it.', 'Mở bằng GenOffice (tab Office), nơi bạn có thể đọc và sửa tệp.')}</span>
+              <span>{tt('Opens in the Office tab, where you can read and edit it.', 'Mở trong tab Office, nơi bạn có thể đọc và sửa tệp.')}</span>
             ) : shown.kind === 'big' ? (
               <span>{tt('Too large to preview here.', 'Quá lớn để xem trước ở đây.')}</span>
             ) : (
