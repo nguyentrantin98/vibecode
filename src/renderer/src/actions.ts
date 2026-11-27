@@ -315,12 +315,17 @@ export async function openFolder(folder?: string | null, opts: { autoChat?: bool
   if (seq !== openSeq) return
   const same = st().root && samePath(st().root!, f)
   let tabs = st().tabs
+  let activeTabId: string | null = null
   if (!same) {
     // the old project's tabs close (their editor models freed), except files with unsaved edits
-    tabs = tabs.filter((t) => t.kind === 'file' && hasUnsaved(t.path))
-    for (const t of st().tabs) if (t.kind === 'file' && !tabs.includes(t)) disposeModel(t.path)
+    const kept = tabs.filter((t) => t.kind === 'file' && hasUnsaved(t.path))
+    for (const t of st().tabs) if (t.kind === 'file' && !kept.includes(t)) disposeModel(t.path)
+    // and the tabs this project had open last time come back
+    const saved = savedTabs(f)
+    tabs = [...saved.tabs, ...kept.filter((t) => !saved.tabs.some((x) => x.id === t.id))]
+    activeTabId = tabs.some((t) => t.id === saved.active) ? saved.active : (tabs[0]?.id ?? null)
   }
-  useStore.setState({ root: f, recent: s.recentFolders, ...(same ? {} : { tabs, activeTabId: tabs[0]?.id ?? null, git: { isRepo: false, root: null, branch: null, files: [] } }) })
+  useStore.setState({ root: f, recent: s.recentFolders, ...(same ? {} : { tabs, activeTabId, git: { isRepo: false, root: null, branch: null, files: [] } }) })
   await window.api.fs.watch(f)
   if (seq !== openSeq) return
   refreshGit()
@@ -464,6 +469,8 @@ interface NewChatOpts {
   prompt?: string
   /** first message typed into the input box but not sent: you finish and send it yourself */
   draft?: string
+  /** a chat reopened after a restart keeps its own model / effort / permission mode instead of the last picked */
+  launch?: Pick<Chat, 'model' | 'effort' | 'permissionMode'>
 }
 
 /**
@@ -518,9 +525,11 @@ export function newChat(opts: NewChatOpts = {}): void {
   }
   // New chats start with the model last picked in this project (else in any chat), and the effort and
   // permission mode last picked in any chat.
-  const model = rememberedModel(cwd)
-  const effort = remembered(EFFORT_KEY, NEW_CHAT_DEFAULTS.effort)
-  const permissionMode = remembered(PERMISSION_KEY, NEW_CHAT_DEFAULTS.permissionMode)
+  const { model, effort, permissionMode } = opts.launch ?? {
+    model: rememberedModel(cwd),
+    effort: remembered(EFFORT_KEY, NEW_CHAT_DEFAULTS.effort),
+    permissionMode: remembered(PERMISSION_KEY, NEW_CHAT_DEFAULTS.permissionMode)
+  }
   args = [...args, ...launchFlags({ model, effort, permissionMode })]
   if (opts.prompt) args = [...args, opts.prompt]
   const n = st().chats.length + 1
@@ -841,6 +850,66 @@ export function renameChat(id: string, title: string): void {
   if (t) st().patchChat(id, { title: t, pinnedTitle: true })
 }
 
+/* The open chats are remembered: after a restart they come back, each picking its conversation back up. */
+const OPEN_CHATS_KEY = 'vibe.openChats'
+type SavedChat = Pick<Chat, 'cwd' | 'title' | 'pinnedTitle' | 'agent' | 'sessionId' | 'model' | 'effort' | 'permissionMode'> & { active?: boolean }
+
+let savedChatsJson = ''
+useStore.subscribe((s, prev) => {
+  if (s.chats === prev.chats && s.activeChatId === prev.activeChatId) return
+  const list: SavedChat[] = s.chats.map((c) => ({
+    cwd: c.cwd,
+    title: c.title,
+    pinnedTitle: c.pinnedTitle,
+    agent: c.agent,
+    sessionId: c.sessionId,
+    model: c.model,
+    effort: c.effort,
+    permissionMode: c.permissionMode,
+    active: c.id === s.activeChatId || undefined
+  }))
+  const json = JSON.stringify(list)
+  if (json === savedChatsJson) return
+  savedChatsJson = json
+  try {
+    localStorage.setItem(OPEN_CHATS_KEY, json)
+  } catch {
+    /* storage unavailable */
+  }
+})
+
+/** Reopen the chats that were open when the app closed, in the same order; returns how many came back. */
+export async function restoreChats(): Promise<number> {
+  let saved: SavedChat[] = []
+  try {
+    saved = JSON.parse(localStorage.getItem(OPEN_CHATS_KEY) ?? '[]')
+  } catch {
+    /* storage unavailable or corrupt */
+  }
+  if (!Array.isArray(saved) || !saved.length) return 0
+  const projects = await window.api.sessions.list().catch(() => [])
+  const sessions = new Map(projects.flatMap((g) => g.sessions.map((s) => [s.id, s] as const)))
+  const ok = installedAgents()
+  let active: string | null = null
+  for (const c of saved) {
+    const agent = c.agent ?? 'claude'
+    const s = c.sessionId ? sessions.get(c.sessionId) : undefined
+    if (!ok.includes(agent) || (s && !s.cwdExists)) continue
+    const base = { cwd: c.cwd, title: c.title, pinnedTitle: c.pinnedTitle, sessionId: c.sessionId, agent }
+    if (agent === 'claude') {
+      // nothing was ever sent in it: there is no conversation to bring back
+      if (!s) continue
+      newChat({ ...base, args: ['--resume', s.id], launch: { model: c.model, effort: c.effort, permissionMode: c.permissionMode } })
+    } else {
+      // other agents pick their conversation back up the way a restart does
+      newChat({ ...base, args: agent === 'codex' && c.sessionId ? ['resume', c.sessionId] : agentDef(agent).resume })
+    }
+    if (c.active) active = st().activeChatId
+  }
+  if (active) selectChat(active)
+  return st().chats.length
+}
+
 /** Per-terminal bookkeeping of the output handlers, dropped when a chat / shell closes. */
 function forgetTerm(id: string): void {
   lastData.delete(id)
@@ -890,6 +959,30 @@ const tabUsed = new Map<string, number>()
 let tabClock = 0
 useStore.subscribe((s, prev) => {
   if (s.activeTabId && s.activeTabId !== prev.activeTabId) tabUsed.set(s.activeTabId, ++tabClock)
+})
+
+/* Each project's open editor tabs are remembered: they open again after a restart, or when you come back to the project. */
+const tabsKey = (root: string): string => 'vibe.tabs:' + folderKey(root)
+
+function savedTabs(root: string): { tabs: EditorTab[]; active: string | null } {
+  try {
+    const v = JSON.parse(localStorage.getItem(tabsKey(root)) ?? 'null')
+    if (v && Array.isArray(v.tabs)) return { tabs: v.tabs, active: v.active ?? null }
+  } catch {
+    /* storage unavailable or corrupt */
+  }
+  return { tabs: [], active: null }
+}
+
+useStore.subscribe((s, prev) => {
+  if (!s.root || (s.tabs === prev.tabs && s.activeTabId === prev.activeTabId && s.root === prev.root)) return
+  try {
+    // unsaved edits aren't kept, so a restored tab opens clean
+    const tabs = s.tabs.map((t) => (t.kind === 'file' ? { ...t, dirty: false } : t))
+    localStorage.setItem(tabsKey(s.root), JSON.stringify({ tabs, active: s.activeTabId }))
+  } catch {
+    /* storage unavailable */
+  }
 })
 
 function pushTab(tab: EditorTab): void {

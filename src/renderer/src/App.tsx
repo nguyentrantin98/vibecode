@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { useStore } from './store'
-import { applyTheme, detectClaude, loadSessions, openFolder, refreshGit, showChatBrowser } from './actions'
+import { applyTheme, detectClaude, installedAgents, loadSessions, newChat, openFolder, refreshGit, restoreChats, showChatBrowser } from './actions'
 import { onGlobalKey } from './shortcuts'
 import { focusTerm } from './terminals'
 import { reloadIfClean } from './fileModelsLite'
@@ -30,7 +30,11 @@ function useBoot(): void {
       useStore.setState({ recent: settings.recentFolders, settings })
       syncLang(settings.language)
       applyTheme()
-      if (settings.lastFolder) openFolder(settings.lastFolder).catch(() => {})
+      if (!settings.lastFolder) return
+      await openFolder(settings.lastFolder, { autoChat: false }).catch(() => {})
+      // the chats open when the app closed come back; with none, a new chat starts as before
+      const restored = useStore.getState().root ? await restoreChats().catch(() => 0) : 0
+      if (!restored && installedAgents().length) newChat()
     })()
 
     window.api.win.state().then((win) => useStore.setState({ win }))
