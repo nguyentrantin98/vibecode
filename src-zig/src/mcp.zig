@@ -2,7 +2,7 @@
 //!
 //! Every `claude` chat is launched with `--mcp-config <file>` naming four servers:
 //!   vibe-browser  http://127.0.0.1:<port>/mcp/<chatId>   — that chat's own Web tab
-//!   vibe-mssql    http://127.0.0.1:<port>/db/<chatId>    — SQL Server connections
+//!   vibe-dbx      http://127.0.0.1:<port>/db/<chatId>    — the databases connected in DBX (dbX tab)
 //!   vibe-zalo     http://127.0.0.1:<port>/zalo/<chatId>  — the personal Zalo account
 //!   vibe-office   http://127.0.0.1:<port>/office/<chatId> — the files open in the Office tab (docs, sheets, PDFs)
 //! and one more once the user turns Desktop control on for the chat:
@@ -20,7 +20,7 @@ const Value = std.json.Value;
 const net = std.Io.net;
 
 const BROWSER = "vibe-browser";
-const DB = "vibe-mssql";
+const DB = "vibe-dbx";
 const ZALO = "vibe-zalo";
 const DESKTOP = "vibe-desktop";
 const OFFICE = "vibe-office";
@@ -217,11 +217,18 @@ fn instructionsOf(comptime mod: type) []const u8 {
 }
 
 fn serverOf(kind: []const u8) Server {
-    if (std.mem.eql(u8, kind, "db")) return .{ .name = DB, .instructions = instructionsOf(m.mssql) };
+    if (std.mem.eql(u8, kind, "db")) return .{ .name = DB, .instructions = instructionsOf(m.dbx) };
     if (std.mem.eql(u8, kind, "zalo")) return .{ .name = ZALO, .instructions = instructionsOf(m.zalo) };
     if (std.mem.eql(u8, kind, "office")) return .{ .name = OFFICE, .instructions = instructionsOf(m.office) };
     if (std.mem.eql(u8, kind, "desktop")) return .{ .name = DESKTOP, .instructions = instructionsOf(m.desktop) };
     return .{ .name = BROWSER, .instructions = BROWSER_INSTRUCTIONS };
+}
+
+/// DBX's tools; none while it is not set up (its instructions tell Claude where to set it up).
+fn dbxTools(a: Allocator) ![]const u8 {
+    if (!@hasDecl(m.dbx, "tools")) return "[]";
+    var fail: core.Fail = .{};
+    return m.dbx.tools(a, &fail) catch "[]";
 }
 
 /// The JSON text of a module's tools array (none when this build does not have the module).
@@ -256,7 +263,7 @@ fn handle(a: Allocator, kind: []const u8, chat: []const u8, method: []const u8, 
     if (is(method, "ping")) return "{}";
     if (is(method, "tools/list")) {
         const tools = if (is(kind, "db"))
-            try toolsOf(m.mssql, a)
+            try dbxTools(a)
         else if (is(kind, "zalo"))
             try toolsOf(m.zalo, a)
         else if (is(kind, "office"))
@@ -267,13 +274,21 @@ fn handle(a: Allocator, kind: []const u8, chat: []const u8, method: []const u8, 
             browser_tools;
         return try std.mem.concat(a, u8, &.{ "{\"tools\":", tools, "}" });
     }
+    // DBX's own tools and results, passed through
+    if (is(method, "tools/call") and is(kind, "db")) {
+        var fail: core.Fail = .{};
+        if (@hasDecl(m.dbx, "callTool")) {
+            if (m.dbx.callTool(a, params orelse .{ .object = .empty }, &fail)) |result| return result else |e| {
+                return try std.mem.concat(a, u8, &.{ "{\"content\":", try text(a, fail.text(e)), ",\"isError\":true}" });
+            }
+        }
+        return try std.mem.concat(a, u8, &.{ "{\"content\":", try text(a, not_available), ",\"isError\":true}" });
+    }
     if (is(method, "tools/call")) {
         const tool = J.str(J.get(params, "name")) orelse "";
         const args: Value = J.get(params, "arguments") orelse .{ .object = .empty };
         var fail: core.Fail = .{};
-        const result: anyerror![]const u8 = if (is(kind, "db"))
-            textTool(m.mssql, a, tool, args, &fail)
-        else if (is(kind, "zalo"))
+        const result: anyerror![]const u8 = if (is(kind, "zalo"))
             textTool(m.zalo, a, tool, args, &fail)
         else if (is(kind, "office"))
             textTool(m.office, a, tool, args, &fail)
@@ -955,7 +970,7 @@ test "the config file of a chat" {
     try std.testing.expectEqual(@as(usize, 4), servers.count());
     try std.testing.expectEqualStrings("http", J.str(J.path(v, &.{ "mcpServers", "vibe-browser", "type" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/mcp/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-browser", "url" })).?);
-    try std.testing.expectEqualStrings("http://127.0.0.1:4321/db/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-mssql", "url" })).?);
+    try std.testing.expectEqualStrings("http://127.0.0.1:4321/db/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-dbx", "url" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/zalo/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-zalo", "url" })).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:4321/office/chat%201%2F%C3%A9", J.str(J.path(v, &.{ "mcpServers", "vibe-office", "url" })).?);
     try std.testing.expectEqualStrings("Bearer tok", J.str(J.path(v, &.{ "mcpServers", "vibe-office", "headers", "Authorization" })).?);

@@ -31,7 +31,7 @@ pub const adblock = if (enabled("adblock")) @import("adblock.zig") else struct {
 pub const extensions = if (enabled("extensions")) @import("extensions.zig") else struct {};
 pub const webdata = if (enabled("webdata")) @import("webdata.zig") else struct {};
 pub const sessions = if (enabled("sessions")) @import("sessions.zig") else struct {};
-pub const mssql = if (enabled("mssql")) @import("mssql.zig") else struct {};
+pub const dbx = if (enabled("dbx")) @import("dbx.zig") else struct {};
 pub const desktop = if (enabled("desktop")) @import("desktop.zig") else struct {};
 pub const gmail = if (enabled("gmail")) @import("gmail.zig") else struct {};
 pub const office = if (enabled("office")) @import("office.zig") else struct {};
@@ -50,7 +50,7 @@ pub const remote = if (enabled("remote")) @import("remote.zig") else struct {};
 /// in start-up order
 pub const all = .{
     hostcmds, settings, secure,     appcmds,    windowing,  pty,   plugins, mcp,
-    browser,  adblock,  extensions, webdata,    sessions,   mssql, desktop, gmail,
+    browser,  adblock,  extensions, webdata,    sessions,   dbx,   desktop, gmail,
     office,   onlyoffice, zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
     git,      thermal, audio, remote,
 };

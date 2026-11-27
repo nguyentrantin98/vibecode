@@ -67,6 +67,93 @@ const overlaps = (a: DOMRect, b: DOMRect): boolean => a.left < b.right && b.left
 
 let labelSeq = 0
 
+/**
+ * Keeps a native page (browser.zig) glued to its placeholder `viewRef`. It is shown only while `live`
+ * (its pane is the one in front), nothing is drawn over it, the window is not hidden and it is not
+ * `hidden`; otherwise it is parked, and the engine throttles, then freezes it.
+ */
+export function usePlacedPage(viewRef: React.RefObject<HTMLDivElement | null>, label: string, live: boolean, onScreen: boolean, zoom: number, hidden: boolean): void {
+  useEffect(() => {
+    const el = viewRef.current
+    if (!el) return
+    let last = ''
+    const place = (): void => {
+      if (!live) {
+        window.api.browser.place(label, { x: 0, y: 0, w: 0, h: 0 }, zoom, false)
+        return
+      }
+      const r = el.getBoundingClientRect()
+      const fits = r.width > 4 && r.height > 4 && document.visibilityState === 'visible' && !el.closest('.browser-tab-pane:not(.on)')
+      const covered = fits && [...document.querySelectorAll(OVERLAYS)].some((o) => overlaps(o.getBoundingClientRect(), r))
+      const visible = fits && !covered && !hidden
+      const key = visible ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)},${zoom}` : 'off'
+      if (key === last) return
+      last = key
+      window.api.browser.place(label, { x: r.left, y: r.top, w: r.width, h: r.height }, zoom, visible)
+    }
+    let frame = 0
+    const soon = (): void => {
+      if (!frame) frame = requestAnimationFrame(() => {
+        frame = 0
+        place()
+      })
+    }
+    // parked: nothing to follow. (Every tab of every chat used to watch the whole document, so each
+    // terminal redraw made all of them measure the layout.)
+    if (!live) {
+      // switched to another Web tab: that page is shown (on top) first, this one hides a moment
+      // later — hiding first left a blank pane flashing between the two
+      if (!onScreen) return place()
+      const id = window.setTimeout(place, 120)
+      return () => window.clearTimeout(id)
+    }
+    place()
+    const ro = new ResizeObserver(soon)
+    ro.observe(el)
+    // menus / dialogs opening, panes sliding, the chat switching. Changes inside a terminal or an
+    // editor (every line of output, the cursor) can't move the page or cover it: skip those.
+    const mo = new MutationObserver((recs) => {
+      for (const r of recs) {
+        const el = r.target instanceof Element ? r.target : r.target.parentElement
+        if (el && !el.closest('.xterm, .monaco-editor')) return soon()
+      }
+    })
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
+    window.addEventListener('resize', soon)
+    document.addEventListener('visibilitychange', soon)
+    document.addEventListener('transitionend', soon, true)
+    // slide-in animations move the placeholder without resizing it: follow it frame by frame while
+    // one runs (instead of measuring every 300 ms forever), plus a slow check as a safety net
+    let until = 0
+    let loop = 0
+    const step = (): void => {
+      place()
+      loop = performance.now() < until ? requestAnimationFrame(step) : 0
+    }
+    const follow = (e: Event): void => {
+      // hover colours and fades can't move the page
+      if (e instanceof TransitionEvent && COLOR_ONLY.has(e.propertyName)) return
+      until = performance.now() + 700
+      if (!loop) loop = requestAnimationFrame(step)
+    }
+    document.addEventListener('transitionrun', follow, true)
+    document.addEventListener('animationstart', follow, true)
+    const tick = window.setInterval(place, 1000)
+    return () => {
+      cancelAnimationFrame(frame)
+      ro.disconnect()
+      mo.disconnect()
+      window.removeEventListener('resize', soon)
+      document.removeEventListener('visibilitychange', soon)
+      document.removeEventListener('transitionend', soon, true)
+      window.clearInterval(tick)
+      cancelAnimationFrame(loop)
+      document.removeEventListener('transitionrun', follow, true)
+      document.removeEventListener('animationstart', follow, true)
+    }
+  }, [viewRef, live, onScreen, label, zoom, hidden])
+}
+
 export function BrowserTab({ chatKey, tabId, active, onScreen }: { chatKey: string; tabId: string; active: boolean; onScreen: boolean }): React.JSX.Element {
   const t = useT()
   const viewRef = useRef<HTMLDivElement>(null)
@@ -172,85 +259,7 @@ export function BrowserTab({ chatKey, tabId, active, onScreen }: { chatKey: stri
   const zoom = box?.zoom ?? 1
   // the open tab of the chat on screen, with the Web view in front: only that page is tracked live
   const live = active && onScreen
-  useEffect(() => {
-    const el = viewRef.current
-    if (!el) return
-    let last = ''
-    const place = (): void => {
-      if (!live) {
-        window.api.browser.place(label, { x: 0, y: 0, w: 0, h: 0 }, zoom, false)
-        return
-      }
-      const r = el.getBoundingClientRect()
-      const fits = r.width > 4 && r.height > 4 && document.visibilityState === 'visible' && !el.closest('.browser-tab-pane:not(.on)')
-      const covered = fits && [...document.querySelectorAll(OVERLAYS)].some((o) => overlaps(o.getBoundingClientRect(), r))
-      const visible = fits && !covered && !home
-      const key = visible ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)},${zoom}` : 'off'
-      if (key === last) return
-      last = key
-      window.api.browser.place(label, { x: r.left, y: r.top, w: r.width, h: r.height }, zoom, visible)
-    }
-    let frame = 0
-    const soon = (): void => {
-      if (!frame) frame = requestAnimationFrame(() => {
-        frame = 0
-        place()
-      })
-    }
-    // parked: nothing to follow. (Every tab of every chat used to watch the whole document, so each
-    // terminal redraw made all of them measure the layout.)
-    if (!live) {
-      // switched to another Web tab: that page is shown (on top) first, this one hides a moment
-      // later — hiding first left a blank pane flashing between the two
-      if (!onScreen) return place()
-      const id = window.setTimeout(place, 120)
-      return () => window.clearTimeout(id)
-    }
-    place()
-    const ro = new ResizeObserver(soon)
-    ro.observe(el)
-    // menus / dialogs opening, panes sliding, the chat switching. Changes inside a terminal or an
-    // editor (every line of output, the cursor) can't move the page or cover it: skip those.
-    const mo = new MutationObserver((recs) => {
-      for (const r of recs) {
-        const el = r.target instanceof Element ? r.target : r.target.parentElement
-        if (el && !el.closest('.xterm, .monaco-editor')) return soon()
-      }
-    })
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] })
-    window.addEventListener('resize', soon)
-    document.addEventListener('visibilitychange', soon)
-    document.addEventListener('transitionend', soon, true)
-    // slide-in animations move the placeholder without resizing it: follow it frame by frame while
-    // one runs (instead of measuring every 300 ms forever), plus a slow check as a safety net
-    let until = 0
-    let loop = 0
-    const step = (): void => {
-      place()
-      loop = performance.now() < until ? requestAnimationFrame(step) : 0
-    }
-    const follow = (e: Event): void => {
-      // hover colours and fades can't move the page
-      if (e instanceof TransitionEvent && COLOR_ONLY.has(e.propertyName)) return
-      until = performance.now() + 700
-      if (!loop) loop = requestAnimationFrame(step)
-    }
-    document.addEventListener('transitionrun', follow, true)
-    document.addEventListener('animationstart', follow, true)
-    const tick = window.setInterval(place, 1000)
-    return () => {
-      cancelAnimationFrame(frame)
-      ro.disconnect()
-      mo.disconnect()
-      window.removeEventListener('resize', soon)
-      document.removeEventListener('visibilitychange', soon)
-      document.removeEventListener('transitionend', soon, true)
-      window.clearInterval(tick)
-      cancelAnimationFrame(loop)
-      document.removeEventListener('transitionrun', follow, true)
-      document.removeEventListener('animationstart', follow, true)
-    }
-  }, [live, onScreen, label, zoom, home])
+  usePlacedPage(viewRef, label, live, onScreen, zoom, home)
 
   const pickDevice = (key: string): void => {
     const next = DEVICES.find((d) => d.key === key) ?? DEVICES[0]

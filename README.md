@@ -21,11 +21,12 @@ Run the installer (no admin rights needed, it installs for the current user). VI
 ## Features
 
 - **Parallel chats**: every open chat gets its own column, side by side (drag a column by its grip to move it); the column you click drives the Source code and Web tabs on the right. Other agents (Codex, Gemini…) work too.
-- **Minimal UI**: buttons are icons only; hover one for its name. The center tabs (Source code, Web, Database, Zalo, Gmail, Office) sit in the title bar.
+- **Minimal UI**: buttons are icons only; hover one for its name. The center tabs (Source code, Web, dbX, Zalo, Gmail, Office) sit in the title bar.
 - **Claude history**: the Chats sidebar lists every project and conversation from `~/.claude/projects` (shared with the Claude desktop app, the CLI and the IDE extensions) and updates live. Clicking a conversation resumes it in its own folder.
 - **Editor + Git**: Monaco editor, go to file / symbol, a live *Changes* panel with diffs, commit history and a branch switcher.
 - **Terminal**: integrated terminals (ConPTY, WebGL rendering).
-- **Web / Database / Zalo tabs**: a built-in browser, SQL Server explorer and Zalo inbox that Claude can also use through its tools.
+- **Web / dbX / Zalo tabs**: a built-in browser, a database client and a Zalo inbox that Claude can also use through its tools.
+- **dbX**: [DBX](https://github.com/t8y2/dbx) (Apache-2.0) inside the app, for SQL Server, PostgreSQL, MySQL, SQLite, Oracle, MongoDB, Redis and 100+ more databases (schemas, queries, data editing, ER diagrams). It is downloaded on first use (~42 MB) and runs only on this computer. Claude queries the same connections through the `vibe-dbx` tools (what it may change is set in DBX's Settings → MCP). The SQL Server connections of the old Database tab are added to DBX the first time it starts.
 - **Screen capture**: **Ctrl+Alt+Z** grabs the screen as it is, VIBE CODE included (so you can capture the app itself); the dashed-square button in the title bar hides VIBE CODE first and grabs what is behind it. Drag to pick a region (click for the whole screen), with a magnifier, size label and colour picker. Then mark it up with rectangle, ellipse, arrow, pen, highlighter, text, mosaic (hide sensitive info) and numbered steps. **Send** copies it to the clipboard and attaches it to the active chat. You can also just copy it or save it as a PNG.
 - **Temperature & sound**: the status bar shows the machine temperature; click it for cooling (fans first, CPU Turbo Boost off, and on ASUS laptops the fan profile and a 100% fan switch). **EQ** next to it is a whole-machine equalizer (presets such as *Less bass*, *Clear voice*, plus 10 bands): VIBE CODE's own audio filter (`src-zig/apo`), added after the speakers' own effects with one admin prompt.
 - **Drop-down (Guake) mode**: a global hotkey slides VIBE CODE over any app.
@@ -49,7 +50,7 @@ the cursor.
 | Ctrl+Shift+N | New chat |
 | Alt+1…9 · Ctrl+Alt+← / → | Switch chat · previous / next chat |
 | Ctrl+Shift+L | Put the cursor in the open chat |
-| Ctrl+1 / 2 / 3 / 4 | Source code / Web / Database / Zalo tab |
+| Ctrl+1 / 2 / 3 / 4 | Source code / Web / dbX / Zalo tab |
 | Ctrl+Shift+E / G / C | Explorer / Changes / Chats |
 | Ctrl+` · Ctrl+J · Ctrl+Shift+` | Toggle terminal · toggle panel · new terminal |
 | Ctrl+B | Toggle sidebar |
@@ -112,7 +113,7 @@ download link above and the in-app Update button both use the latest release. It
 ## Layout
 
 - `src-zig/src`: the native side (see `src-zig/PORTING.md`). Terminals (`pty.zig`), files and the file
-  watcher, git, Claude's session store, SQL Server (`mssql.zig`), Zalo (`zalo/`), the built-in
+  watcher, git, Claude's session store, DBX for the dbX tab (`dbx.zig`), Zalo (`zalo/`), the built-in
   browser (`browser.zig`, native WebView2 tabs that sleep when hidden), the MCP server Claude's tools
   talk to (`mcp.zig`), window / tray / drop-down mode (`windowing.zig`), screen capture
   (`capture.zig` + `capture.html`), updates (`appcmds.zig`), the window host (`host/`)

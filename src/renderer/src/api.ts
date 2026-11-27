@@ -15,12 +15,6 @@ import type {
   WebExtension,
   ClaudeApiKey,
   ClaudeInfo,
-  DbColumn,
-  DbConnection,
-  DbConnectionInput,
-  DbFound,
-  DbObject,
-  DbQueryResult,
   DirEntry,
   ExEntry,
   ExFound,
@@ -183,23 +177,16 @@ export const api = {
     /** ids of the sessions whose transcript changed (empty: only project folders came or went) */
     onChanged: (cb: (ids: string[]) => void): Off => on('sessions:changed', cb)
   },
-  db: {
-    list: (): Promise<DbConnection[]> => invoke('db_list'),
-    get: (id: string): Promise<(DbConnection & { conn: string }) | null> => invoke('db_get', { id }),
-    save: (c: DbConnectionInput): Promise<DbConnection[]> => invoke('db_save', { c }),
-    saveMany: (list: DbConnectionInput[]): Promise<DbConnection[]> => invoke('db_save_many', { list }),
-    remove: (id: string): Promise<DbConnection[]> => invoke('db_remove', { id }),
-    test: (conn: string): Promise<{ ok: boolean; error?: string; version?: string }> => invoke('db_test', { conn }),
-    buildConn: (f: { server: string; database?: string; windowsAuth: boolean; user?: string; password?: string; trustCert?: boolean; encrypt?: boolean }): Promise<string> =>
-      invoke('db_build_conn', { f }),
-    parseConn: (conn: string): Promise<Record<string, string>> => invoke('db_parse_conn', { conn }),
-    query: (id: string, sql: string, database?: string, maxRows?: number): Promise<DbQueryResult> => invoke('db_query', { id, sql, database, maxRows }),
-    cancel: (): void => void invoke('db_cancel'),
-    databases: (id: string): Promise<string[]> => invoke('db_databases', { id }),
-    objects: (id: string, database: string): Promise<DbObject[]> => invoke('db_objects', { id, database }),
-    columns: (id: string, database: string, schema: string, table: string): Promise<DbColumn[]> => invoke('db_columns', { id, database, schema, table }),
-    scanProject: (folder: string): Promise<DbFound[]> => invoke('db_scan_project', { folder }),
-    scanSsms: (): Promise<DbFound[]> => invoke('db_scan_ssms')
+  dbx: {
+    /** DBX (dbX tab): downloaded yet? */
+    status: (): Promise<{ installed: boolean; version: string; downloadSize: number }> => invoke('dbx_status'),
+    /** downloads it once (`dbx:progress` meanwhile) */
+    install: (): Promise<void> => invoke('dbx_install'),
+    onProgress: (cb: (done: number, total: number) => void): Off => on('dbx:progress', cb),
+    /** starts it if need be; `run` changes when it restarts (the page has to log in again) */
+    start: (): Promise<{ origin: string; run: number }> => invoke('dbx_start'),
+    /** logs the native page `label` (on DBX's origin) in and sends it to DBX's start page */
+    login: (label: string, dark: boolean): Promise<void> => invoke('dbx_login', { label, dark })
   },
   remote: {
     state: (): Promise<RemoteState> => invoke('remote_state'),

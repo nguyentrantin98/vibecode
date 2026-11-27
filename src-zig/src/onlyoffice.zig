@@ -296,7 +296,7 @@ extern "iphlpapi" fn GetExtendedTcpTable(table: ?*anyopaque, size: *u32, order: 
 /// Some program already listens on this TCP port. std binds a listening socket as shared on
 /// Windows (as with SO_REUSEADDR), so binding a taken port succeeds and the two programs then
 /// answer each other's connections: it has to be looked up instead.
-fn portTaken(port: u16) bool {
+pub fn portTaken(port: u16) bool {
     // MIB_TCPTABLE of the IPv4 listeners: a count, then rows of 5 DWORDs (state, local address,
     // local port in network byte order, remote address, remote port)
     var table: [64 * 1024]u8 align(4) = undefined;

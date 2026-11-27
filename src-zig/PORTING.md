@@ -77,17 +77,20 @@ a `-Donly` build without them still compiles:
                pub fn addExtension / extensions / extensionEnable / extensionRemove (used by extensions.zig, same agent)
     adblock    as adblock.rs (used by browser.zig and extensions.zig, same agent)
     extensions pub fn installDefaults() void
-    mssql      pub fn cancelAll() void
     zalo_tasks pub fn init() void, pub fn onIngest(ids: []const []const u8) void
                pub fn safeName(a: Allocator, s: []const u8) ![]u8
     zalo       pub fn init() void
 
 Claude's tools (the MCP server in `mcp.zig` calls these):
 
-    mssql, zalo, office:
+    zalo, office:
         pub const INSTRUCTIONS: []const u8
         pub fn tools(a: Allocator) ![]const u8                    // the JSON text of the tools array
         pub fn callTool(a: Allocator, name: []const u8, args: std.json.Value, fail: *core.Fail) anyerror![]const u8   // the text result
+    dbx (passes DBX's own MCP tools and results through):
+        pub const INSTRUCTIONS: []const u8
+        pub fn tools(a: Allocator, fail: *core.Fail) ![]const u8          // the JSON text of the tools array
+        pub fn callTool(a: Allocator, params: std.json.Value, fail: *core.Fail) ![]const u8   // the JSON text of the MCP result
     desktop:
         pub fn enabled(chat: []const u8) bool
         pub const INSTRUCTIONS, pub fn tools(a) as above

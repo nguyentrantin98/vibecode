@@ -41,7 +41,6 @@ pub fn main(init: std.process.Init) !void {
 
     // the app is quitting: no terminal or query outlives it
     if (@hasDecl(m.pty, "killAll")) m.pty.killAll();
-    if (@hasDecl(m.mssql, "cancelAll")) m.mssql.cancelAll();
     inline for (m.all) |mod| {
         if (@hasDecl(mod, "deinit")) mod.deinit();
     }

@@ -84,7 +84,7 @@ export const COMMANDS: Command[] = [
 
   { id: 'viewCode', label: ['Show Source code tab', 'Hiện tab Source code'], keys: 'Ctrl+1', run: () => useStore.setState({ centerView: 'code' }) },
   { id: 'viewWeb', label: ['Show Web tab', 'Hiện tab Web'], keys: 'Ctrl+2', run: () => openBrowser() },
-  { id: 'viewDb', label: ['Show Database tab', 'Hiện tab Database'], keys: 'Ctrl+3', run: () => useStore.setState({ centerView: 'db' }) },
+  { id: 'viewDb', label: ['Show dbX tab (databases)', 'Hiện tab dbX (cơ sở dữ liệu)'], keys: 'Ctrl+3', run: () => useStore.setState({ centerView: 'db' }) },
   { id: 'viewZalo', label: ['Show Zalo tab', 'Hiện tab Zalo'], keys: 'Ctrl+4', run: () => useStore.setState({ centerView: 'zalo' }) },
   { id: 'viewGmail', label: ['Show Gmail tab', 'Hiện tab Gmail'], keys: 'Ctrl+5', run: () => useStore.setState({ centerView: 'gmail' }) },
   { id: 'viewOffice', label: ['Show Office tab', 'Hiện tab Office'], keys: 'Ctrl+6', run: () => useStore.setState({ centerView: 'office' }) },

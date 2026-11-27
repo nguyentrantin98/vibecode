@@ -14,7 +14,7 @@ import { EditorFontButton } from './EditorFont'
 const FileEditor = lazy(() => import('./MonacoViews').then((m) => ({ default: m.FileEditor })))
 const DiffView = lazy(() => import('./MonacoViews').then((m) => ({ default: m.DiffView })))
 const FileExplorerPane = lazy(() => import('./FileExplorer').then((m) => ({ default: m.FileExplorerPane })))
-const DatabasePane = lazy(() => import('./Database').then((m) => ({ default: m.DatabasePane })))
+const DbxPane = lazy(() => import('./Dbx').then((m) => ({ default: m.DbxPane })))
 const ZaloPane = lazy(() => import('./Zalo').then((m) => ({ default: m.ZaloPane })))
 const GmailPane = lazy(() => import('./Gmail').then((m) => ({ default: m.GmailPane })))
 const OfficePane = lazy(() => import('./Office').then((m) => ({ default: m.OfficePane })))
@@ -24,7 +24,7 @@ import { tr, useT } from '../i18n'
 
 /**
  * The center tabs, as icons in the title bar: Source code (project files, diffs, and This PC: any
- * file on the computer), Web (built-in browser), Database, Zalo, Gmail, Office.
+ * file on the computer), Web (built-in browser), dbX (DBX, databases), Zalo, Gmail, Office.
  */
 export function CenterTabs(): React.JSX.Element {
   const t = useT()
@@ -52,7 +52,7 @@ export function CenterTabs(): React.JSX.Element {
       <button role="tab" aria-selected={view === 'web'} className={view === 'web' ? 'on' : ''} title="Web (Ctrl+2)" onClick={() => openBrowser()}>
         <Globe size={15} />
       </button>
-      <button role="tab" aria-selected={view === 'db'} className={view === 'db' ? 'on' : ''} title="Database (Ctrl+3)" onClick={() => useStore.setState({ centerView: 'db' })}>
+      <button role="tab" aria-selected={view === 'db'} className={view === 'db' ? 'on' : ''} title="dbX (Ctrl+3)" onClick={() => useStore.setState({ centerView: 'db' })}>
         <Database size={15} />
       </button>
       <button role="tab" aria-selected={view === 'zalo'} className={view === 'zalo' ? 'on' : ''} title="Zalo (Ctrl+4)" onClick={() => useStore.setState({ centerView: 'zalo' })}>
@@ -78,7 +78,7 @@ export function EditorArea(): React.JSX.Element {
   const view = useStore((s) => s.centerView)
   const key = useStore((s) => browserKey(s.activeChatId))
   const browsers = useStore((s) => s.browsers)
-  // the Database tab mounts on first visit, then stays (keeps its SQL, results and open tree)
+  // the dbX tab mounts on first visit, then stays (DBX keeps its page)
   const [filesSeen, setFilesSeen] = useState(view === 'files')
   const [dbSeen, setDbSeen] = useState(view === 'db')
   const [zaloSeen, setZaloSeen] = useState(view === 'zalo')
@@ -116,9 +116,9 @@ export function EditorArea(): React.JSX.Element {
         </div>
       )}
       {dbSeen && (
-        <div className={`center-pane db-host${view === 'db' ? ' on' : ''}`}>
+        <div className={`center-pane dbx-host${view === 'db' ? ' on' : ''}`}>
           <Suspense fallback={null}>
-            <DatabasePane />
+            <DbxPane />
           </Suspense>
         </div>
       )}
