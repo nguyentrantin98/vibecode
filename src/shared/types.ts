@@ -286,6 +286,16 @@ export interface WebExtension {
   options?: string
 }
 
+/** A VS Code extension installed for the code editor. */
+export interface EditorExt {
+  /** "publisher.name", lower-case */
+  id: string
+  /** the folder holding package.json; its paths are relative to this */
+  dir: string
+  /** package.json as it is */
+  manifest: string
+}
+
 export interface WebSuggestion {
   url: string
   title: string

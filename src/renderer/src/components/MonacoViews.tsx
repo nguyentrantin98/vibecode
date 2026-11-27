@@ -6,12 +6,15 @@ import { SlidePill } from './motion'
 import { fileUri, useStore, type EditorTab } from '../store'
 import { editorOptions, languageFor, monaco } from '../monaco'
 import { ensureModel, getModel, isDirty, markTab, saveModel } from '../fileModels'
+import { loadEditorExtensions } from '../editorExtensions'
 import { FileIcon } from './icons'
 import { useEditorFont } from './EditorFont'
 import { IMAGE_RE, imagePreview } from '../attachments'
 import { tr, useT } from '../i18n'
 
 /* Everything that needs Monaco: loaded the first time a file or diff tab opens. */
+
+void loadEditorExtensions()
 
 function Breadcrumbs({ path }: { path: string }): React.JSX.Element {
   const t = useT()
@@ -36,7 +39,9 @@ function Breadcrumbs({ path }: { path: string }): React.JSX.Element {
 
 /* ================================ File editor ================================ */
 
-const useMonacoTheme = (): string => useStore((s) => (s.themeResolved === 'light' ? 'studio-light' : 'studio-dark'))
+// a theme from an installed extension, once Monaco has it; else the app's light / dark
+const useMonacoTheme = (): string =>
+  useStore((s) => (s.editorTheme && s.editorTheme === s.editorThemeLoaded ? s.editorTheme : s.themeResolved === 'light' ? 'studio-light' : 'studio-dark'))
 
 export function FileEditor({ tab }: { tab: Extract<EditorTab, { kind: 'file' }> }): React.JSX.Element {
   const theme = useMonacoTheme()

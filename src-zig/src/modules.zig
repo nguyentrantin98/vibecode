@@ -29,6 +29,7 @@ pub const mcp = if (enabled("mcp")) @import("mcp.zig") else struct {};
 pub const browser = if (enabled("browser")) @import("browser.zig") else struct {};
 pub const adblock = if (enabled("adblock")) @import("adblock.zig") else struct {};
 pub const extensions = if (enabled("extensions")) @import("extensions.zig") else struct {};
+pub const editorext = if (enabled("editorext")) @import("editorext.zig") else struct {};
 pub const webdata = if (enabled("webdata")) @import("webdata.zig") else struct {};
 pub const sessions = if (enabled("sessions")) @import("sessions.zig") else struct {};
 pub const dbx = if (enabled("dbx")) @import("dbx.zig") else struct {};
@@ -51,5 +52,5 @@ pub const all = .{
     hostcmds, settings, secure,     appcmds,    windowing,  pty,   plugins, mcp,
     browser,  adblock,  extensions, webdata,    sessions,   dbx,   desktop, gmail,
     office,   zalo,     zalo_tasks, toast,      capture, fsx,   fsearch,
-    git,      thermal, audio, remote,
+    git,      thermal, audio, remote, editorext,
 };

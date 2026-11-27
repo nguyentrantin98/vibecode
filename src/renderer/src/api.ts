@@ -13,6 +13,7 @@ import type {
   ChatLog,
   ChatTask,
   WebExtension,
+  EditorExt,
   ClaudeApiKey,
   ClaudeInfo,
   DirEntry,
@@ -214,8 +215,8 @@ export const api = {
     read: (uid: number): Promise<MailBody> => invoke('gmail_read', { uid }),
     taskContext: (uid: number): Promise<{ file: string; files: string[] }> => invoke('gmail_task_context', { uid })
   },
-  office: {
   /** Office tab → GenOffice, the separate app files open in (src-zig/src/office.zig) */
+  office: {
     /** file dialog: a document, spreadsheet, presentation or PDF to open */
     pick: (): Promise<string | null> => invoke('office_pick'),
     /** files opened from the Office tab, most recent first, as they are on disk */
@@ -259,6 +260,13 @@ export const api = {
     setMode: (mode: WindowMode): void => void invoke('win_set_mode', { mode }),
     onState: (cb: (s: WindowState) => void): Off => on('win:state', cb),
     onShown: (cb: () => void): Off => on('win:shown', cb)
+  },
+  /** VS Code extensions of the code editor (themes, grammars, snippets: see editorExtensions.ts) */
+  editorExt: {
+    list: (): Promise<EditorExt[]> => invoke('editor_ext_list'),
+    /** an https link to a .vsix (Open VSX), or a .vsix file on this computer */
+    install: (source: string): Promise<EditorExt> => invoke('editor_ext_install', { source }),
+    remove: (id: string): Promise<void> => invoke('editor_ext_remove', { id })
   },
   fs: {
     readDir: (dir: string): Promise<DirEntry[]> => invoke('fs_read_dir', { dir }),

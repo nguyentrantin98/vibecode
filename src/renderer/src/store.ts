@@ -84,6 +84,12 @@ interface State {
   browsers: Record<string, ChatBrowser>
   /** project folder (lower-cased, no trailing slash) → Claude runs it in bypass-permissions mode */
   projectBypass: Record<string, boolean>
+  /** code editor theme from an installed VS Code extension ('' = the app's own) */
+  editorTheme: string
+  /** that theme, once Monaco has it */
+  editorThemeLoaded: string
+  /** VS Code extensions installed for the code editor (see editorExtensions.ts) */
+  editorExts: EditorExtInfo[]
 
   set: (p: Partial<State>) => void
   patchChat: (id: string, p: Partial<Chat>) => void
@@ -99,6 +105,19 @@ export interface WebTab {
 export interface ChatBrowser {
   tabs: WebTab[]
   active: string
+}
+
+/** A VS Code extension of the code editor, and what of it the editor can use. */
+export interface EditorExtInfo {
+  id: string
+  name: string
+  publisher: string
+  version: string
+  description: string
+  themes: { id: string; label: string }[]
+  /** languages it adds (syntax colours, brackets, comments) */
+  languages: string[]
+  snippets: number
 }
 
 export const useStore = create<State>((set) => ({
@@ -146,6 +165,9 @@ export const useStore = create<State>((set) => ({
   centerView: 'code',
   browsers: {},
   projectBypass: {},
+  editorTheme: localStorage.getItem('vibe.editorTheme') ?? '',
+  editorThemeLoaded: '',
+  editorExts: [],
 
   set: (p) => set(p),
   // a patch that changes nothing keeps the same array: the terminal title (Claude's spinner) and
@@ -167,6 +189,7 @@ export const useStore = create<State>((set) => ({
 // a hidden chats sidebar stays hidden after a restart
 useStore.subscribe((s, prev) => {
   if (s.sidebarOpen !== prev.sidebarOpen) localStorage.setItem('vibe.sidebarOpen', s.sidebarOpen ? '1' : '0')
+  if (s.editorTheme !== prev.editorTheme) localStorage.setItem('vibe.editorTheme', s.editorTheme)
 })
 
 export const uid = (): string => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)

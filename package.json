@@ -36,6 +36,8 @@
     "react-resizable-panels": "4.24.0",
     "typescript": "7.0.2",
     "vite": "8.3.8",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2",
     "zustand": "5.1.0"
   }
 }

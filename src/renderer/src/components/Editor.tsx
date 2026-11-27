@@ -10,6 +10,7 @@ import { ChangesView, ExplorerView } from './Sidebar'
 import { FileIcon, Logo } from './icons'
 import { SourceSwitch } from './SourceSwitch'
 import { EditorFontButton } from './EditorFont'
+import { EditorExtensionsButton } from './EditorExtensions'
 // heavy parts load on first use: Monaco (~4 MB) only when a file or diff opens
 const FileEditor = lazy(() => import('./MonacoViews').then((m) => ({ default: m.FileEditor })))
 const DiffView = lazy(() => import('./MonacoViews').then((m) => ({ default: m.DiffView })))
@@ -386,6 +387,7 @@ const CodeArea = memo(function CodeArea(): React.JSX.Element {
           ))}
           <div className="tab-strip-fill" />
         </div>
+        <EditorExtensionsButton />
         <EditorFontButton />
         </div>
       )}

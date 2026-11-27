@@ -5619,6 +5619,52 @@ html:lang(vi) .xterm-host.drop-hover::after { content: 'Thả vào để đính 
   opacity: 0.5;
 }
 
+/* ---- editor extensions (EditorExtensions.tsx) ---- */
+.edext-menu {
+  width: 380px;
+}
+.edext-theme {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.edext-theme:hover {
+  background: var(--w-08);
+}
+.edext-theme.on {
+  color: var(--text);
+}
+.edext-sub {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.edext-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+.edext-found .btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* ---- phone remote (status bar) ---- */
 .remote-panel {
   width: 300px;

@@ -128,13 +128,20 @@ loader.config({ monaco })
 registerFallbackSymbols(monaco)
 
 const extMap = new Map<string, string>()
-for (const lang of monaco.languages.getLanguages()) {
-  for (const ext of lang.extensions ?? []) if (!extMap.has(ext.toLowerCase())) extMap.set(ext.toLowerCase(), lang.id)
+const nameMap = new Map<string, string>()
+/** File extensions / names → language; run again after editor extensions register languages (the first one to claim an extension keeps it). */
+export function indexLanguages(): void {
+  for (const lang of monaco.languages.getLanguages()) {
+    for (const ext of lang.extensions ?? []) if (!extMap.has(ext.toLowerCase())) extMap.set(ext.toLowerCase(), lang.id)
+    for (const n of lang.filenames ?? []) if (!nameMap.has(n.toLowerCase())) nameMap.set(n.toLowerCase(), lang.id)
+  }
 }
+indexLanguages()
 
 export function languageFor(path: string): string {
   const name = path.split(/[\\/]/).pop()?.toLowerCase() ?? ''
   if (name === 'dockerfile') return 'dockerfile'
+  if (nameMap.has(name)) return nameMap.get(name)!
   const dot = name.lastIndexOf('.')
   if (dot < 0) return 'plaintext'
   return extMap.get(name.slice(dot)) ?? 'plaintext'
