@@ -127,7 +127,7 @@ export const useStore = create<State>((set) => ({
   })(),
 
   sidebarView: 'chats',
-  sidebarOpen: true,
+  sidebarOpen: localStorage.getItem('vibe.sidebarOpen') !== '0',
   bottomOpen: false,
   quickOpen: false,
   quickOpenQuery: '',
@@ -163,6 +163,11 @@ export const useStore = create<State>((set) => ({
       return { shells: s.shells.map((x) => (x.id === id ? { ...x, ...p } : x)) }
     })
 }))
+
+// a hidden chats sidebar stays hidden after a restart
+useStore.subscribe((s, prev) => {
+  if (s.sidebarOpen !== prev.sidebarOpen) localStorage.setItem('vibe.sidebarOpen', s.sidebarOpen ? '1' : '0')
+})
 
 export const uid = (): string => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4)
 

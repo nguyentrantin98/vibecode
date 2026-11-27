@@ -1,5 +1,6 @@
-import { FileText, Monitor, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { FileText, Globe, Monitor, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useStore } from '../store'
+import { openBrowser } from '../actions'
 import { SlidePill } from './motion'
 import { useT } from '../i18n'
 
@@ -22,6 +23,9 @@ export function SourceSwitch(): React.JSX.Element {
       </button>
       <button className={side === 'pc' ? 'on' : ''} title={t('This PC: browse and read any file on this computer', 'This PC: duyệt và đọc mọi tệp trên máy tính này')} onClick={() => useStore.setState({ centerView: 'files' })}>
         <Monitor size={14} />
+      </button>
+      <button title={t('Web: the built-in browser (Ctrl+2)', 'Web: trình duyệt tích hợp (Ctrl+2)')} onClick={() => openBrowser()}>
+        <Globe size={14} />
       </button>
       <button className="code-side-fold" title={folded ? t('Expand the column', 'Mở rộng cột') : t('Collapse the column', 'Thu gọn cột')} onClick={fold}>
         {folded ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}

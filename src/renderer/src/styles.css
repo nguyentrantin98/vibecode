@@ -4361,6 +4361,8 @@ button.usage-meter.temp-meter:hover {
 /* New project button pinned under the projects list */
 .sidebar-foot {
   flex: none;
+  display: flex;
+  justify-content: space-between;
   padding: 4px 8px;
   border-top: 1px solid var(--border);
 }

@@ -7,6 +7,7 @@ import {
   Loader2,
   FolderGit2,
   FolderPlus,
+  PanelLeftClose,
   History,
   RefreshCw,
   RotateCcw,
@@ -112,6 +113,9 @@ function ChatsView(): React.JSX.Element {
           onClick={() => openFolder(null, { autoChat: true })}
         >
           <FolderPlus size={16} />
+        </button>
+        <button className="icon-btn" title={t('Hide sidebar (Ctrl+B)', 'Ẩn thanh bên (Ctrl+B)')} onClick={() => useStore.setState({ sidebarOpen: false })}>
+          <PanelLeftClose size={16} />
         </button>
       </div>
     </>
