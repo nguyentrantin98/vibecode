@@ -471,6 +471,8 @@ interface NewChatOpts {
   draft?: string
   /** a chat reopened after a restart keeps its own model / effort / permission mode instead of the last picked */
   launch?: Pick<Chat, 'model' | 'effort' | 'permissionMode'>
+  /** false: leave Explorer / Changes where they are (reopening chats after a restart selects one at the end) */
+  follow?: boolean
 }
 
 /**
@@ -556,6 +558,7 @@ export function newChat(opts: NewChatOpts = {}): void {
   }
   createTerm({ id: chat.id, cwd: chat.cwd, kind: 'claude', claudeArgs: args })
   useStore.setState((s) => ({ chats: [...s.chats, chat], activeChatId: chat.id, ...browserForNewChat(s, chat.id) }))
+  if (opts.follow !== false) followChat(chat)
 }
 
 /**
@@ -586,6 +589,7 @@ function newAgentChat(cwd: string, agentId: AgentId, opts: NewChatOpts, blank: b
   if (blank) blankChats.add(chat.id)
   createTerm({ id: chat.id, cwd, kind: 'claude', agent: agentId, claudeArgs: args })
   useStore.setState((s) => ({ chats: [...s.chats, chat], activeChatId: chat.id, ...browserForNewChat(s, chat.id) }))
+  if (opts.follow !== false) followChat(chat)
 }
 
 const agentFlags = (agentId: AgentId | undefined, permissionMode?: string): string[] =>
@@ -716,13 +720,16 @@ export function selectChat(id: string, focus = true): void {
   const chat = st().chats.find((c) => c.id === id)
   useStore.setState({ activeChatId: id })
   if (chat?.attention) st().patchChat(id, { attention: false })
-  // Explorer / Changes follow the chat you're looking at.
-  if (chat) {
-    const proj = st().projects.find((g) => g.sessions.some((s) => s.id === chat.sessionId))
-    const folder = proj?.cwd ?? chat.cwd
-    if (st().root && !samePath(st().root!, folder) && !samePath(st().root!, chat.cwd)) openFolder(folder, { autoChat: false })
-  }
+  if (chat) followChat(chat)
   if (focus) setTimeout(() => focusTerm(id), 0)
+}
+
+/** Explorer / Changes follow the chat you're looking at: open its project unless it's the one already showing. */
+function followChat(chat: Chat): void {
+  const proj = st().projects.find((g) => g.sessions.some((s) => s.id === chat.sessionId))
+  const folder = proj?.cwd ?? chat.cwd
+  const root = st().root
+  if (!root || (!samePath(root, folder) && !samePath(root, chat.cwd))) void openFolder(folder, { autoChat: false })
 }
 
 /**
@@ -805,6 +812,7 @@ export async function newChatFromOfficeFile(path: string): Promise<void> {
 }
 
 export function closeChat(id: string): void {
+  const before = st().activeChatId
   disposeTerm(id)
   clearAttachments(id)
   forgetTerm(id)
@@ -825,6 +833,11 @@ export function closeChat(id: string): void {
     delete browsers[id]
     return { chats, activeChatId, browsers }
   })
+  // the chat on screen closed: the one taking its place gets the focus; either way Explorer / Changes
+  // go back to the chat left on screen (even when it is the only one)
+  const next = st().chats.find((c) => c.id === st().activeChatId)
+  if (next && next.id !== before) selectChat(next.id)
+  else if (next) followChat(next)
 }
 
 export function restartChat(id: string): void {
@@ -899,10 +912,10 @@ export async function restoreChats(): Promise<number> {
     if (agent === 'claude') {
       // nothing was ever sent in it: there is no conversation to bring back
       if (!s) continue
-      newChat({ ...base, args: ['--resume', s.id], launch: { model: c.model, effort: c.effort, permissionMode: c.permissionMode } })
+      newChat({ ...base, args: ['--resume', s.id], launch: { model: c.model, effort: c.effort, permissionMode: c.permissionMode }, follow: false })
     } else {
       // other agents pick their conversation back up the way a restart does
-      newChat({ ...base, args: agent === 'codex' && c.sessionId ? ['resume', c.sessionId] : agentDef(agent).resume })
+      newChat({ ...base, args: agent === 'codex' && c.sessionId ? ['resume', c.sessionId] : agentDef(agent).resume, follow: false })
     }
     if (c.active) active = st().activeChatId
   }
