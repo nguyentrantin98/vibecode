@@ -77,7 +77,9 @@ or the live terminal; sends messages; answers Claude's numbered choices with one
 
 - **App**: `npm run build:android` makes `android/build/vibe-code-remote.apk` (~25 KB, Android 7+). It finds
   the computer by itself (UDP broadcast) and shows the page the computer serves, so it never needs updating.
-- **No app**: any phone browser at `http://<computer IP>:47717` works the same.
+- **No app** (iPad, iPhone, any phone): the browser at `http://<computer IP>:47717`, or the Internet link, works
+  the same. Share → **Add to Home Screen** makes it an icon that opens full screen; pair once more inside it
+  (iOS keeps a home-screen app's storage apart from Safari's).
 
 Port 47717 (TCP + UDP); allow it when Windows Firewall asks (private networks). Off by default; the PIN is
 valid 5 minutes and dies after 5 wrong tries; each phone gets its own token (only its hash is stored, in

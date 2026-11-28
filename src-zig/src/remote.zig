@@ -808,6 +808,9 @@ fn onRequest(a: Allocator, request: *std.http.Server.Request, stream: net.Stream
         assets.get("/remote.html")
     else if (std.mem.startsWith(u8, path, "/assets/") and std.mem.indexOf(u8, path, "..") == null)
         assets.get(path)
+    // what a home screen needs to add it like an app (src/renderer/public/remote-*)
+    else if (std.mem.startsWith(u8, path, "/remote-") and std.mem.lastIndexOfScalar(u8, path, '/') == 0)
+        assets.get(path)
     else
         null;
     if (asset) |f| {
