@@ -1,12 +1,16 @@
 package vn.tinjs.vibecode.remote;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -35,6 +39,7 @@ import org.json.JSONObject;
  * Away from the Wi-Fi: the computer's page tells the app its Internet address (a Cloudflare
  * tunnel, with this phone's token in the link); the app opens that from then on, and goes back to
  * finding the computer on the Wi-Fi when it stops working (the address changes when the PC restarts).
+ * The start screen can also scan the QR code the computer shows (the camera, for that page only).
  */
 public class Main extends Activity {
     /** src-zig/src/remote.zig: TCP for the page, UDP for "VIBECODE?" */
@@ -45,6 +50,8 @@ public class Main extends Activity {
     SharedPreferences prefs;
     /** the page shown, for the bridge (which runs on another thread) */
     volatile String page = "";
+    /** the start screen asked for the camera while Android asks the user */
+    PermissionRequest pendingCamera;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -57,6 +64,7 @@ public class Main extends Activity {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
         web.addJavascriptInterface(new Bridge(), "VibeAndroid");
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -96,9 +104,39 @@ public class Main extends Activity {
                 if (r.isForMainFrame() && isTunnel(r.getUrl()) && res.getStatusCode() >= 500) v.loadUrl(START + "#auto");
             }
         });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(PermissionRequest r) {
+                // the camera, for the start screen's QR scanner: never for the pages computers serve
+                boolean camera = false;
+                for (String res : r.getResources()) if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)) camera = true;
+                if (!camera || !"file".equals(r.getOrigin().getScheme())) {
+                    r.deny();
+                    return;
+                }
+                String[] only = {PermissionRequest.RESOURCE_VIDEO_CAPTURE};
+                if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) r.grant(only);
+                else {
+                    pendingCamera = r;
+                    requestPermissions(new String[]{Manifest.permission.CAMERA}, 1);
+                }
+            }
+        });
         setContentView(web);
         if (state != null) web.restoreState(state);
         else web.loadUrl(prefs.getString("tunnel", START + "#auto"));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        if (pendingCamera == null) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) pendingCamera.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+        else pendingCamera.deny();
+        pendingCamera = null;
+    }
+
+    static boolean isTunnelLink(Uri u) {
+        return "https".equals(u.getScheme()) && u.getHost() != null && u.getHost().endsWith(".trycloudflare.com");
     }
 
     /** the Internet address the computer gave */
@@ -130,8 +168,18 @@ public class Main extends Activity {
         @JavascriptInterface
         public void saveTunnel(String link) {
             Uri u = Uri.parse(link);
-            if (Uri.parse(page).getPort() != PORT || !"https".equals(u.getScheme()) || u.getHost() == null || !u.getHost().endsWith(".trycloudflare.com")) return;
+            if (Uri.parse(page).getPort() != PORT || !isTunnelLink(u)) return;
             prefs.edit().putString("tunnel", link).apply();
+        }
+
+        /** The start screen: a link typed in or scanned (https://….trycloudflare.com/, maybe #pair=PIN). Kept and opened. */
+        @JavascriptInterface
+        public void openTunnel(String link) {
+            Uri u = Uri.parse(link);
+            if (!page.startsWith(START) || !isTunnelLink(u)) return;
+            // the PIN is for once: the page keeps its token itself
+            prefs.edit().putString("tunnel", "https://" + u.getHost() + "/").apply();
+            web.post(() -> web.loadUrl(link));
         }
 
         /** Asks the network for VIBE CODE computers; each answer calls window.onFound({ip,name,port}), then onSearchDone(). */

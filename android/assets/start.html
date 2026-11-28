@@ -28,6 +28,12 @@
       .spin { width: 11px; height: 11px; border: 2px solid #0a84ff; border-right-color: transparent; border-radius: 50%; animation: r 0.8s linear infinite; }
       @keyframes r { to { transform: rotate(360deg); } }
       .help { margin-top: 28px; color: #7d7d83; font-size: 13px; }
+      button.scan { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 14px; border: 0; border-radius: 12px; background: #0a84ff; color: #fff; font: 600 16px system-ui, sans-serif; }
+      #scanner { position: fixed; inset: 0; background: #000; display: none; flex-direction: column; z-index: 9; }
+      #scanner video { flex: 1; min-height: 0; width: 100%; object-fit: cover; }
+      #scanner .frame { position: absolute; left: 50%; top: 42%; width: 64vmin; height: 64vmin; transform: translate(-50%, -50%); border: 3px solid #ffffffcc; border-radius: 18px; box-shadow: 0 0 0 100vmax #0007; pointer-events: none; }
+      #scanner .tip { position: absolute; left: 0; right: 0; top: calc(42% + 34vmin + 16px); text-align: center; color: #fff; padding: 0 24px; }
+      #scanner button { margin: 16px 20px calc(16px + env(safe-area-inset-bottom)); padding: 13px; border: 0; border-radius: 12px; background: #3a3a3d; color: #fff; font: 600 15px system-ui, sans-serif; }
     </style>
   </head>
   <body>
@@ -35,16 +41,19 @@
       <div class="logo">VIBE CODE</div>
       <h1 id="title"></h1>
       <div id="error"></div>
+      <button id="scan" class="scan"></button>
       <div id="savedBox"><h2 id="savedTitle"></h2><div id="saved"></div></div>
       <h2><span id="foundTitle"></span><span id="spin" class="spin"></span><button id="rescan" class="link"></button></h2>
       <div id="found"></div>
       <h2 id="manualTitle"></h2>
       <div class="row">
-        <input id="ip" inputmode="decimal" placeholder="192.168.1.10" autocomplete="off" />
+        <input id="ip" type="text" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
         <button id="go" class="go"></button>
       </div>
       <p class="help" id="help"></p>
     </main>
+    <div id="scanner"><video id="video" playsinline muted></video><div class="frame"></div><div class="tip" id="scanTip"></div><button id="scanClose"></button></div>
+    <script src="jsQR.js"></script>
     <script>
       const vi = navigator.language.toLowerCase().startsWith('vi')
       const t = (en, v) => (vi ? v : en)
@@ -58,10 +67,14 @@
       $('foundTitle').textContent = t('On this Wi-Fi', 'Trong mạng Wi-Fi này')
       $('rescan').textContent = t('Search again', 'Tìm lại')
       $('manualTitle').textContent = t('Or type its address', 'Hoặc nhập địa chỉ')
+      $('scan').textContent = t('📷  Scan the QR code', '📷  Quét mã QR')
+      $('scanTip').textContent = t('Point at the QR code in VIBE CODE’s phone panel', 'Hướng camera vào mã QR trong bảng điện thoại của VIBE CODE')
+      $('scanClose').textContent = t('Cancel', 'Huỷ')
+      $('ip').placeholder = t('192.168.1.10 or the https://… link', '192.168.1.10 hoặc link https://…')
       $('go').textContent = t('Connect', 'Kết nối')
       $('help').textContent = t(
-        'On the computer, turn on the phone remote: click the phone icon in VIBE CODE’s status bar. The phone and the computer must be on the same network (or the same Tailscale / VPN).',
-        'Trên máy tính, bật điều khiển từ điện thoại: bấm biểu tượng điện thoại ở thanh trạng thái của VIBE CODE. Điện thoại và máy tính phải cùng mạng (hoặc cùng Tailscale / VPN).'
+        'On the computer, turn on the phone remote: click the phone icon in VIBE CODE’s status bar. On the same Wi-Fi the app finds it by itself; from anywhere else, tick “Reach it over the Internet” there and scan its QR code.',
+        'Trên máy tính, bật điều khiển từ điện thoại: bấm biểu tượng điện thoại ở thanh trạng thái của VIBE CODE. Cùng Wi-Fi thì app tự tìm thấy máy; ở nơi khác, tích “Truy cập qua Internet” trong bảng đó rồi quét mã QR.'
       )
 
       function open(ip, name) {
@@ -118,10 +131,82 @@
         else window.onSearchDone()
       }
       $('rescan').onclick = search
-      $('go').onclick = () => {
-        const ip = $('ip').value.trim().replace(/^https?:\/\//, '').replace(/[:/].*$/, '')
-        if (ip) open(ip)
+      /** What was typed or scanned: an IP address, or the computer's link (http://<IP>:47717, https://….trycloudflare.com). */
+      function go(text) {
+        const s = text.trim()
+        if (!s) return false
+        const tunnel = /^(?:https:\/\/)?([a-z0-9-]+\.trycloudflare\.com)(\/.*)?$/i.exec(s)
+        if (tunnel) {
+          const link = 'https://' + tunnel[1].toLowerCase() + (tunnel[2] || '/')
+          // the app keeps it and opens it from then on (Main.java)
+          if (window.VibeAndroid && VibeAndroid.openTunnel) VibeAndroid.openTunnel(link)
+          else location.href = link
+          return true
+        }
+        // a phone keyboard may give "," for "."
+        const ip = /^(?:http:\/\/)?(\d{1,3}(?:[.,]\d{1,3}){3})(?::\d+)?\/?$/.exec(s)
+        if (ip) {
+          open(ip[1].replace(/,/g, '.'))
+          return true
+        }
+        return false
       }
+      function showError(text) {
+        $('error').innerHTML = '<p class="err"></p>'
+        $('error').firstChild.textContent = text
+      }
+      $('go').onclick = () => {
+        if (!go($('ip').value))
+          showError(t('Type an address like 192.168.1.10, or the https://… link shown on the computer.', 'Nhập địa chỉ dạng 192.168.1.10, hoặc link https://… hiện trên máy tính.'))
+      }
+
+      /* ---- scanning the QR code shown on the computer ---- */
+      let stream = null
+      async function scan() {
+        $('error').textContent = ''
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false })
+        } catch (e) {
+          return showError(t('The camera could not be opened. Allow VIBE CODE Remote to use it (Android settings → Apps → Permissions), or type the address below.', 'Không mở được camera. Cho phép VIBE CODE Remote dùng camera (Cài đặt Android → Ứng dụng → Quyền), hoặc nhập địa chỉ bên dưới.'))
+        }
+        const video = $('video')
+        video.srcObject = stream
+        $('scanner').style.display = 'flex'
+        await video.play().catch(() => {})
+        const detector = 'BarcodeDetector' in window ? new BarcodeDetector({ formats: ['qr_code'] }) : null
+        const canvas = document.createElement('canvas')
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        while (stream) {
+          await new Promise((r) => setTimeout(r, 150))
+          if (!stream || video.readyState < 2) continue
+          let text = ''
+          try {
+            // Android's own detector when the WebView has it (Play services), else jsQR
+            if (detector) text = ((await detector.detect(video))[0] || {}).rawValue || ''
+          } catch (e) {}
+          try {
+            if (!text) {
+              const k = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight))
+              canvas.width = Math.round(video.videoWidth * k)
+              canvas.height = Math.round(video.videoHeight * k)
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+              const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+              text = (jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' }) || {}).data || ''
+            }
+          } catch (e) {}
+          if (!text || !stream) continue
+          stopScan()
+          if (!go(text)) showError(t('This QR code is not a VIBE CODE one.', 'Mã QR này không phải của VIBE CODE.'))
+        }
+      }
+      function stopScan() {
+        if (stream) stream.getTracks().forEach((tr) => tr.stop())
+        stream = null
+        $('video').srcObject = null
+        $('scanner').style.display = 'none'
+      }
+      $('scan').onclick = scan
+      $('scanClose').onclick = stopScan
       $('ip').onkeydown = (e) => e.key === 'Enter' && $('go').onclick()
 
       const hash = location.hash.slice(1)

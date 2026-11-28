@@ -4,6 +4,9 @@
     package="vn.tinjs.vibecode.remote">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- the start screen's QR scanner -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:label="VIBE CODE Remote"
