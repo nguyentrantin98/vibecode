@@ -294,24 +294,35 @@ fn readSession(a: Allocator, file: []const u8, dir_name: []const u8) !?SessionIn
 
     const HEAD = 96 * 1024;
     const TAIL = 256 * 1024;
-    const head = try parseLines(a, try readSlice(a, file, 0, @min(HEAD, size)), false);
+    // the first prompt can end far past HEAD (images pasted into it make it a line of megabytes):
+    // without it the chat would not be listed, so the head grows until it holds it
+    const MAX_HEAD = 16 * 1024 * 1024;
     const tail: []const Value = if (size > HEAD) try parseLines(a, try readSlice(a, file, size -| TAIL, @min(TAIL, size)), true) else &.{};
 
+    var head_len: u64 = @min(HEAD, size);
+    var head: []const Value = undefined;
     var cwd: ?[]const u8 = null;
     var first_prompt: ?[]const u8 = null;
     var created: ?i64 = null;
-    for (head) |r| {
-        if (cwd == null) if (u.strOf(r, "cwd")) |c| if (c.len > 0) {
-            cwd = c;
-        };
-        if (created == null) if (u.strOf(r, "timestamp")) |ts| if (u.parseDate(ts)) |t| if (t != 0) {
-            created = t;
-        };
-        if (first_prompt == null) first_prompt = try userText(a, r);
-        if (cwd != null and first_prompt != null and created != null) break;
+    var head_title: ?[]const u8 = null;
+    while (true) {
+        head = try parseLines(a, try readSlice(a, file, 0, head_len), false);
+        for (head) |r| {
+            if (cwd == null) if (u.strOf(r, "cwd")) |c| if (c.len > 0) {
+                cwd = c;
+            };
+            if (created == null) if (u.strOf(r, "timestamp")) |ts| if (u.parseDate(ts)) |t| if (t != 0) {
+                created = t;
+            };
+            if (first_prompt == null) first_prompt = try userText(a, r);
+            if (cwd != null and first_prompt != null and created != null) break;
+        }
+        head_title = findTitle(head);
+        if (first_prompt != null or (head_title != null and head_title.?.len > 0)) break;
+        if (head_len >= @min(size, MAX_HEAD)) break;
+        head_len = @min(head_len * 4, size, MAX_HEAD);
     }
 
-    const head_title = findTitle(head);
     const mtime_ms = st.mtime.toMilliseconds();
     var info: ?SessionInfo = null;
     if (first_prompt != null or (head_title != null and head_title.?.len > 0)) {
@@ -1659,6 +1670,14 @@ test "session list: long transcripts are read at both ends" {
     try testing.expectEqualStrings(times("long prompt ", 10)[0..90], plain.title);
     // no timestamp in the file: the file's own times
     try testing.expect(plain.created > 1_700_000_000_000 and plain.updated > 1_700_000_000_000);
+
+    // the first prompt carries an image that makes its line longer than the head: still listed
+    _ = try t.write(&.{ "p", "image.jsonl" }, "{\"type\":\"queue-operation\"}\n{\"type\":\"user\",\"cwd\":\"/w/proj\",\"message\":{\"content\":[{\"type\":\"image\",\"source\":{\"data\":\"" ++ times("AAAAAAAA", 25 * 1024) ++ "\"}},{\"type\":\"text\",\"text\":\"what is in it\"}]}}\n");
+    const three = try listSessions(a);
+    const image = for (three[0].sessions) |x| {
+        if (std.mem.eql(u8, x.id, "image")) break x;
+    } else return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("what is in it", image.title);
 }
 
 test "scan: only the new whole lines are read" {
