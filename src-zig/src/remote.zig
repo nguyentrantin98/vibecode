@@ -643,6 +643,15 @@ extern "ws2_32" fn gethostname(name: [*]u8, len: c_int) callconv(.winapi) c_int;
 extern "ws2_32" fn getaddrinfo(node: [*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInfo, res: *?*AddrInfo) callconv(.winapi) c_int;
 extern "ws2_32" fn freeaddrinfo(ai: ?*AddrInfo) callconv(.winapi) void;
 extern "ws2_32" fn WSAStartup(version: u16, data: *[512]u8) callconv(.winapi) c_int;
+extern "ws2_32" fn setsockopt(s: usize, level: c_int, name: c_int, value: [*]const u8, len: c_int) callconv(.winapi) c_int;
+
+/// Small messages (a click, a frame's acknowledgement) go out at once instead of waiting to be
+/// grouped with more (Nagle's algorithm): what makes the screen view feel immediate.
+fn noDelay(stream: net.Stream) void {
+    if (!core.is_windows) return;
+    const on: c_int = 1;
+    _ = setsockopt(@intFromPtr(stream.socket.handle), 6, 1, std.mem.asBytes(&on), @sizeOf(c_int)); // IPPROTO_TCP, TCP_NODELAY
+}
 
 fn localAddresses(a: Allocator) []const []const u8 {
     if (!core.is_windows) return &.{};
@@ -744,6 +753,7 @@ fn acceptLoop(listener: net.Server) void {
 
 fn serve(stream: net.Stream) void {
     defer stream.close(core.io);
+    noDelay(stream);
     // a WebSocket message has to fit in the read buffer: a long prompt pasted on the phone
     const in_buf = core.gpa.alloc(u8, 1 << 20) catch return;
     defer core.gpa.free(in_buf);

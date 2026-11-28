@@ -535,21 +535,19 @@ pre.code.err {
   font-weight: 700;
 }
 
-/* ---- the computer's screen (desk.ts) ---- */
+/* ---- the computer's screen (desk.ts): the picture fills the view, the controls float over it ---- */
 .desk {
   position: fixed;
   inset: 0;
-  display: flex;
-  flex-direction: column;
   background: #000;
+  overflow: hidden;
   /* full screen from the home screen: clear of the status bar and the rounded corners */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  --top: env(safe-area-inset-top);
+  --bottom: env(safe-area-inset-bottom);
 }
 .desk-wrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  position: absolute;
+  inset: var(--top) 0 0 0;
 }
 .desk-stage {
   position: absolute;
@@ -567,52 +565,200 @@ pre.code.err {
   color: var(--dim);
   pointer-events: none;
 }
+.desk-dock,
+.desk-sheet,
 .desk-kb {
+  position: absolute;
+  background: rgba(36, 36, 38, 0.82);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+.desk-dock {
+  left: 50%;
+  bottom: calc(12px + var(--bottom));
+  transform: translateX(-50%);
   display: flex;
-  gap: 8px;
-  padding: 6px 8px;
-  background: var(--bg-1);
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 16px;
+  transition: opacity 0.15s;
 }
-.desk-input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  color: var(--text);
-  font: inherit;
-  outline: none;
+.desk-dock.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
-.desk-bar {
-  display: flex;
-  gap: 6px;
-  padding: 6px 8px;
-  overflow-x: auto;
-  background: var(--bg-1);
-  border-top: 1px solid var(--border);
-  scrollbar-width: none;
-  flex: none;
-}
-.desk-bar::-webkit-scrollbar {
-  display: none;
+.desk-grip {
+  width: 22px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  font-size: 18px;
+  touch-action: none;
+  cursor: grab;
 }
 .desk-key {
-  flex: none;
   min-width: 40px;
-  height: 36px;
-  padding: 0 10px;
-  border-radius: 9px;
-  background: var(--bg-3);
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
   font-size: 14px;
+  font-weight: 500;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.08s, transform 0.08s;
+}
+.desk-key:active {
+  background: rgba(255, 255, 255, 0.24);
+  transform: scale(0.94);
 }
 .desk-key.on {
+  background: var(--accent);
+  color: #fff;
+}
+.desk-key.accent {
   background: var(--accent);
   color: #fff;
 }
 .desk-key.close {
   background: transparent;
   color: var(--dim);
+}
+.desk-sheet,
+.desk-kb {
+  left: 50%;
+  bottom: 0;
+  width: min(100%, 560px);
+  transform: translate(-50%, 110%);
+  border-radius: 18px 18px 0 0;
+  padding-bottom: var(--bottom);
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.desk-sheet.open,
+.desk-kb.open {
+  transform: translate(-50%, 0);
+}
+.desk-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+}
+.desk-tab {
+  flex: 1;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+.desk-tab.on {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+.desk-tab.desk-close {
+  flex: none;
+  width: 40px;
+}
+.desk-sheet-body {
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  padding: 8px;
+}
+.desk-page {
+  display: grid;
+  gap: 6px;
+}
+.desk-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.desk-split {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 10px;
+  align-items: center;
+}
+.desk-grid2,
+.desk-grid3,
+.desk-grid4 {
+  display: grid;
+  gap: 6px;
+}
+.desk-grid2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+.desk-grid3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+.desk-grid4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+.desk-page .desk-key {
+  height: 44px;
+  min-width: 0;
+}
+.desk-grid2 .desk-key {
+  white-space: normal;
+  line-height: 1.2;
+}
+.desk-pad {
+  display: grid;
+  grid-template-areas: '. u .' 'l d r';
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.desk-group {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--faint);
+  margin: 4px 2px 0;
+}
+.desk-page .desk-combo {
+  height: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  white-space: normal;
+  line-height: 1.15;
+}
+.desk-combo b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.desk-combo small {
+  font-size: 10.5px;
+  color: var(--dim);
+  font-family: var(--mono);
+}
+.desk-kb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px calc(8px + var(--bottom));
+}
+.desk-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.desk-input:focus {
+  border-color: var(--accent);
 }

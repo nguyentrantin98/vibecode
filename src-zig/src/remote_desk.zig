@@ -4,7 +4,7 @@
 //! Each phone asks for the part of the screen it shows (`view`, desktop pixels) at the size it
 //! shows it (`pw`×`ph`), so a zoomed-in phone gets sharp text and a zoomed-out one a small picture.
 //! Frames carry only what changed since the last one: the picture is cut into 32×32 tiles, and
-//! each run of changed rows goes out as one JPEG. A phone acknowledges every frame and at most two
+//! each run of changed rows goes out as one JPEG. A phone acknowledges every frame and at most three
 //! are on their way, so a slow network gets fewer frames instead of a backlog.
 //!
 //! Frame (binary, little endian): u8 1, u8 flags (1: whole picture), u16 0, u32 seq,
@@ -32,8 +32,11 @@ const Rect = struct { x: i32 = 0, y: i32 = 0, w: u32 = 0, h: u32 = 0 };
 const tile = 32;
 /// the largest picture a phone gets (pixels on its longer side)
 const max_side = 2560;
-const min_frame_ms = 66;
-const in_flight = 2;
+const min_frame_ms = 16;
+/// how often an unchanged screen is looked at again: soon after a change or an input, then less
+const idle_min_ms = 15;
+const idle_max_ms = 120;
+const in_flight = 3;
 
 pub const Desk = struct {
     sink: Sink,
@@ -49,6 +52,8 @@ pub const Desk = struct {
     quality: f32 = 0.6,
     sent: u32 = 0,
     acked: u32 = 0,
+    /// the phone clicked or typed: look at the screen again now, its answer shows at once
+    poked: std.atomic.Value(bool) = .init(false),
 
     /// A `desk.*` message from the phone.
     pub fn handle(d: *Desk, a: Allocator, t: []const u8, msg: std.json.ObjectMap) void {
@@ -76,6 +81,7 @@ pub const Desk = struct {
             return;
         }
         const mods = modsOf(msg);
+        defer d.poked.store(true, .release);
         if (eql(t, "desk.mouse")) {
             const x = num(msg, "x") orelse return;
             const y = num(msg, "y") orelse return;
@@ -156,6 +162,7 @@ pub const Desk = struct {
         var prev_gen: u32 = 0;
         var prev_cursor: [2]i32 = .{ 0, 0 };
         var last_ms: u64 = 0;
+        var idle_ms: u64 = idle_min_ms;
         while (true) {
             d.mutex.lock();
             while (d.running and (d.pw == 0 or d.sent -% d.acked >= in_flight))
@@ -189,9 +196,13 @@ pub const Desk = struct {
             };
             if (bands.len == 0 and std.mem.eql(i32, &cursor, &prev_cursor)) {
                 core.gpa.free(px);
-                core.sleepMs(80);
+                // nothing new: wait a little longer each time, unless the phone does something
+                var waited: u64 = 0;
+                while (waited < idle_ms and !d.poked.load(.acquire)) : (waited += 5) core.sleepMs(5);
+                idle_ms = if (d.poked.swap(false, .acq_rel)) idle_min_ms else @min(idle_ms * 2, idle_max_ms);
                 continue;
             }
+            idle_ms = idle_min_ms;
             const msg = frameMsg(a, &enc, q, d.sent +% 1, whole, view, pw, ph, cursor, px, bands) catch |e| {
                 std.log.warn("remote desk: frame: {s}", .{@errorName(e)});
                 core.gpa.free(px);
