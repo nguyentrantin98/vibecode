@@ -1137,8 +1137,13 @@ kbd {
   display: flex;
   flex-direction: column;
 }
-.editor-layer:not(.on) {
-  visibility: hidden;
+/* `*` too: Monaco's diff view sets visibility: visible on its two editors, which showed through over the file editor */
+.editor-layer:not(.on),
+.editor-layer:not(.on) * {
+  visibility: hidden !important;
+}
+.editor-layer.on {
+  z-index: 1;
 }
 .monaco-wrap {
   flex: 1;
