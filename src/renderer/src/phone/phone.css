@@ -115,6 +115,10 @@ body.offline .offline-bar {
   padding: 6px 12px;
   font-size: 13px;
 }
+a.btn {
+  color: inherit;
+  text-decoration: none;
+}
 .btn.ghost {
   background: transparent;
   color: var(--dim);
@@ -529,4 +533,85 @@ pre.code.err {
   color: #fff;
   font-size: 20px;
   font-weight: 700;
+}
+
+/* ---- the computer's screen (desk.ts) ---- */
+.desk {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.desk-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.desk-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.desk-note {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 40%;
+  text-align: center;
+  color: var(--dim);
+  pointer-events: none;
+}
+.desk-kb {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.desk-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.desk-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  scrollbar-width: none;
+  flex: none;
+}
+.desk-bar::-webkit-scrollbar {
+  display: none;
+}
+.desk-key {
+  flex: none;
+  min-width: 40px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--bg-3);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.desk-key.on {
+  background: var(--accent);
+  color: #fff;
+}
+.desk-key.close {
+  background: transparent;
+  color: var(--dim);
 }

@@ -2,6 +2,52 @@ import { useEffect, useRef, useState } from 'react'
 import { Smartphone, Trash2 } from 'lucide-react'
 import type { RemoteState } from '../../../shared/types'
 import { useT } from '../i18n'
+import { qrMatrix } from '../qr'
+
+/** The Internet address: its QR code (with the PIN in it while one is shown: scanning pairs at once), or where it is at. */
+function Tunnel({ st, pinLive }: { st: RemoteState; pinLive: boolean }): React.JSX.Element {
+  const t = useT()
+  const [copied, setCopied] = useState(false)
+  if (st.tunnelPhase === 'download')
+    return <div className="remote-sub">{t('Downloading cloudflared (once)…', 'Đang tải cloudflared (một lần)…') + ` ${Math.floor((st.tunnelDone / st.tunnelTotal) * 100)}%`}</div>
+  if (st.tunnelPhase === 'failed')
+    return <div className="remote-sub remote-bad">{t('Could not open the tunnel: ', 'Không mở được đường hầm: ') + st.tunnelError + t(' — trying again shortly', ' — sẽ thử lại sau ít giây')}</div>
+  if (st.tunnelPhase !== 'up' || !st.tunnelUrl)
+    return <div className="remote-sub">{st.tunnelUrl ? t('Connection to Cloudflare lost, reconnecting…', 'Mất kết nối tới Cloudflare, đang nối lại…') : t('Opening a Cloudflare tunnel…', 'Đang mở đường hầm Cloudflare…')}</div>
+  const link = st.tunnelUrl + '/' + (pinLive && st.pin ? `#pair=${st.pin}` : '')
+  const m = qrMatrix(link)
+  const n = m.length + 8
+  let d = ''
+  m.forEach((row, y) => row.forEach((dark, x) => dark && (d += `M${x + 4} ${y + 4}h1v1h-1z`)))
+  return (
+    <>
+      <svg className="remote-qr" viewBox={`0 0 ${n} ${n}`} shapeRendering="crispEdges">
+        <rect width={n} height={n} fill="#fff" />
+        <path d={d} fill="#000" />
+      </svg>
+      <div className="remote-sub">
+        {pinLive
+          ? t('Scan with the phone camera: it opens and pairs by itself.', 'Quét bằng camera điện thoại: mở và ghép nối luôn.')
+          : t('Scan with the phone camera, then pair with a PIN. Paired phones get this link by themselves.', 'Quét bằng camera điện thoại rồi ghép nối bằng PIN. Điện thoại đã ghép tự nhận link này.')}
+      </div>
+      <button
+        className="remote-url remote-link"
+        title={t('Copy', 'Sao chép')}
+        onClick={() =>
+          void navigator.clipboard.writeText(st.tunnelUrl!).then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+        }
+      >
+        {copied ? t('Copied', 'Đã sao chép') : st.tunnelUrl}
+      </button>
+      <div className="remote-sub">
+        {t('The link stays while this PC is on; it changes after a restart.', 'Link giữ nguyên khi máy còn bật; đổi sau khi khởi động lại máy.')}
+      </div>
+    </>
+  )
+}
 
 /** Status-bar phone button: turn the phone remote on, pair a phone with a PIN, remove paired phones. */
 export function RemoteButton(): React.JSX.Element {
@@ -82,6 +128,16 @@ export function RemoteButton(): React.JSX.Element {
                   {t('Pair a phone', 'Ghép nối điện thoại')}
                 </button>
               )}
+              <label className="remote-row remote-opt">
+                <input type="checkbox" checked={st.desktop} onChange={(e) => void window.api.remote.desktop(e.target.checked).then(setSt)} />
+                <span>{t('Allow screen control (mouse, keyboard)', 'Cho điều khiển màn hình (chuột, bàn phím)')}</span>
+              </label>
+              <div className="menu-sep">{t('From anywhere (4G/5G)', 'Từ bất cứ đâu (4G/5G)')}</div>
+              <label className="remote-row">
+                <input type="checkbox" checked={st.tunnel} onChange={(e) => void window.api.remote.tunnel(e.target.checked).then(setSt)} />
+                <span>{t('Reach it over the Internet', 'Truy cập qua Internet')}</span>
+              </label>
+              {st.tunnel && <Tunnel st={st} pinLive={pinLeft > 0} />}
               {st.devices.length > 0 && <div className="menu-sep">{t('Paired phones', 'Điện thoại đã ghép')}</div>}
               {st.devices.map((d) => (
                 <div key={d.id} className="remote-device">

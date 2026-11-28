@@ -195,6 +195,10 @@ export const api = {
     /** a fresh PIN a phone can pair with for a few minutes */
     pin: (): Promise<RemoteState> => invoke('remote_pin'),
     revoke: (id: string): Promise<RemoteState> => invoke('remote_revoke', { id }),
+    /** a public https address (Cloudflare quick tunnel) for phones away from the Wi-Fi */
+    tunnel: (on: boolean): Promise<RemoteState> => invoke('remote_tunnel', { on }),
+    /** lets paired phones see the screen and use the mouse and keyboard */
+    desktop: (on: boolean): Promise<RemoteState> => invoke('remote_desktop', { on }),
     /** a message to one phone (`to`), or to all of them */
     push: (msg: unknown, to?: number): void => void invoke('remote_push', { to, msg: JSON.stringify(msg) }),
     /** a message from a phone (`{t:'bye'}` when it disconnects) */

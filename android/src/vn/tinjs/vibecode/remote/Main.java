@@ -2,12 +2,14 @@ package vn.tinjs.vibecode.remote;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -29,6 +31,10 @@ import org.json.JSONObject;
  * The whole app: one WebView. It starts on assets/start.html (find the computer), then shows the
  * page the computer serves at http://<ip>:47717/ — so the remote always matches the desktop
  * version and this APK never needs updating for UI changes.
+ *
+ * Away from the Wi-Fi: the computer's page tells the app its Internet address (a Cloudflare
+ * tunnel, with this phone's token in the link); the app opens that from then on, and goes back to
+ * finding the computer on the Wi-Fi when it stops working (the address changes when the PC restarts).
  */
 public class Main extends Activity {
     /** src-zig/src/remote.zig: TCP for the page, UDP for "VIBECODE?" */
@@ -36,10 +42,14 @@ public class Main extends Activity {
     static final String START = "file:///android_asset/start.html";
 
     WebView web;
+    SharedPreferences prefs;
+    /** the page shown, for the bridge (which runs on another thread) */
+    volatile String page = "";
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        prefs = getSharedPreferences("remote", MODE_PRIVATE);
         getWindow().setStatusBarColor(0xff232325);
         getWindow().setNavigationBarColor(0xff1c1c1e);
         web = new WebView(this);
@@ -52,13 +62,18 @@ public class Main extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
-                if ("file".equals(u.getScheme()) || u.getPort() == PORT) return false;
+                if ("file".equals(u.getScheme()) || u.getPort() == PORT || isTunnel(u)) return false;
                 // links in Claude's answers open in the browser
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, u));
                 } catch (Exception ignored) {
                 }
                 return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                page = url;
             }
 
             @Override
@@ -69,13 +84,27 @@ public class Main extends Activity {
 
             @Override
             public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-                if (r.isForMainFrame() && !"file".equals(r.getUrl().getScheme()))
-                    v.loadUrl(START + "#error=" + Uri.encode(r.getUrl().getHost()));
+                if (!r.isForMainFrame() || "file".equals(r.getUrl().getScheme())) return;
+                // the Internet address is gone (or out of reach): the computer on this Wi-Fi then
+                if (isTunnel(r.getUrl())) v.loadUrl(START + "#auto");
+                else v.loadUrl(START + "#error=" + Uri.encode(r.getUrl().getHost()));
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse res) {
+                // Cloudflare's own error page: no tunnel at that address any more, or the app is closed
+                if (r.isForMainFrame() && isTunnel(r.getUrl()) && res.getStatusCode() >= 500) v.loadUrl(START + "#auto");
             }
         });
         setContentView(web);
         if (state != null) web.restoreState(state);
-        else web.loadUrl(START + "#auto");
+        else web.loadUrl(prefs.getString("tunnel", START + "#auto"));
+    }
+
+    /** the Internet address the computer gave */
+    boolean isTunnel(Uri u) {
+        String saved = prefs.getString("tunnel", null);
+        return saved != null && "https".equals(u.getScheme()) && u.getHost() != null && u.getHost().equals(Uri.parse(saved).getHost());
     }
 
     @Override
@@ -95,6 +124,14 @@ public class Main extends Activity {
         @JavascriptInterface
         public String deviceName() {
             return Build.MANUFACTURER + " " + Build.MODEL;
+        }
+
+        /** The computer's page on the Wi-Fi gives its Internet address: https://….trycloudflare.com/#token=… */
+        @JavascriptInterface
+        public void saveTunnel(String link) {
+            Uri u = Uri.parse(link);
+            if (Uri.parse(page).getPort() != PORT || !"https".equals(u.getScheme()) || u.getHost() == null || !u.getHost().endsWith(".trycloudflare.com")) return;
+            prefs.edit().putString("tunnel", link).apply();
         }
 
         /** Asks the network for VIBE CODE computers; each answer calls window.onFound({ip,name,port}), then onSearchDone(). */

@@ -31,7 +31,7 @@ Run the installer (no admin rights needed, it installs for the current user). VI
 - **Temperature & sound**: the status bar shows the machine temperature; click it for cooling (fans first, CPU Turbo Boost off, and on ASUS laptops the fan profile and a 100% fan switch). **EQ** next to it is a whole-machine equalizer (presets such as *Less bass*, *Clear voice*, plus 10 bands): VIBE CODE's own audio filter (`src-zig/apo`), added after the speakers' own effects with one admin prompt.
 - **Drop-down (Guake) mode**: a global hotkey slides VIBE CODE over any app.
 - **Attachments**: paste or drop images and files into a chat. They wait in a tray until you send.
-- **Phone remote**: follow and drive your chats from an Android phone on the same Wi-Fi (see below).
+- **Phone remote**: follow and drive your chats, or the whole screen, from an Android phone, on the Wi-Fi or from anywhere (see below).
 
 ## Shortcuts
 
@@ -82,7 +82,20 @@ or the live terminal; sends messages; answers Claude's numbered choices with one
 Port 47717 (TCP + UDP); allow it when Windows Firewall asks (private networks). Off by default; the PIN is
 valid 5 minutes and dies after 5 wrong tries; each phone gets its own token (only its hash is stored, in
 `remote.json`) and can be removed from the panel. Traffic is plain HTTP on your local network: use it on
-networks you trust, or over Tailscale / a VPN from outside.
+networks you trust.
+
+- **From anywhere (4G/5G)**: tick **Reach it over the Internet**. VIBE CODE downloads Cloudflare's
+  `cloudflared` once (pinned by version and SHA-256) and opens a quick tunnel (no account): an
+  `https://….trycloudflare.com` address, shown with a QR code. Scanning it while a PIN is shown pairs at once.
+  Paired phones are told the address: the app switches to it by itself, a browser gets a "🌐 Away link" to
+  bookmark. cloudflared keeps running when VIBE CODE quits or updates, so the address only changes when the
+  computer restarts (scan again then); turning the option or the remote off ends it.
+- **Screen control**: tick **Allow screen control**, then **🖥 Screen** on the phone: the computer's screen, its
+  mouse and keyboard. Tap = click, hold = right click, hold then move = drag, pinch = zoom (the phone gets
+  sharp text, not a stretched picture), two fingers = scroll; a key bar (Ctrl/Alt/Shift/Win, arrows, F-keys,
+  Ctrl+C/V…) and a text box for typing (any language). Only changed parts of the screen are sent, and only as
+  fast as the network takes them. Windows keeps the lock screen, UAC prompts and programs running as
+  administrator out of reach.
 
 ## Development
 
@@ -120,5 +133,5 @@ download link above and the in-app Update button both use the latest release. It
 - `src/renderer/src/api.ts`: `window.api`, the page's bridge to the native commands and events
 - `src/renderer/src`: UI (`components/`), state (`store.ts`, `actions.ts`), terminals, Monaco setup
 - `scripts/release.cjs`: build and publish a release
-- `src-zig/src/remote.zig` (server, pairing, discovery) · `src/renderer/src/remote.ts` (what phones see and do) ·
+- `src-zig/src/remote.zig` (server, pairing, discovery, tunnel) · `remote_desk.zig` (screen, mouse, keyboard) · `src/renderer/src/remote.ts` (what phones see and do) ·
   `src/renderer/src/phone/` (the phone page) · `android/` (the APK: one Java file, built by `scripts/build-android.cjs`)

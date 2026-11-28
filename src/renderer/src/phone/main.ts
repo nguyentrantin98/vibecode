@@ -5,6 +5,7 @@
  */
 import type { ChatItem, ChatLog } from '../../../shared/types'
 import './phone.css'
+import { deskFrame, deskMessage, deskStart, deskStop, deskView } from './desk'
 
 type Status = 'starting' | 'working' | 'idle' | 'exited'
 interface ChatRow {
@@ -26,6 +27,8 @@ const vi = navigator.language.toLowerCase().startsWith('vi')
 const t = (en: string, viText: string): string => (vi ? viText : en)
 
 const TOKEN_KEY = 'vibe.remote.token'
+/** the Android app (android/src/…/Main.java) */
+const bridge = (window as unknown as { VibeAndroid?: { deviceName(): string; saveTunnel?(link: string): void } }).VibeAndroid
 const KEYS: [string, string][] = [
   ['Esc', '\x1b'],
   ['↑', '\x1b[A'],
@@ -88,6 +91,13 @@ function send(msg: Record<string, unknown>): boolean {
   return true
 }
 
+/** For the screen view: frequent messages (acknowledgements) that are simply dropped while offline. */
+function deskSend(msg: Record<string, unknown>): boolean {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !online) return false
+  ws.send(JSON.stringify(msg))
+  return true
+}
+
 function connect(): void {
   const token = localStorage.getItem(TOKEN_KEY)
   if (!token) return route()
@@ -95,7 +105,8 @@ function connect(): void {
   const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`)
   ws = sock
   sock.onopen = () => sock.send(JSON.stringify({ t: 'auth', token }))
-  sock.onmessage = (e) => onMessage(JSON.parse(String(e.data)))
+  sock.binaryType = 'arraybuffer'
+  sock.onmessage = (e) => (e.data instanceof ArrayBuffer ? deskFrame(e.data) : onMessage(JSON.parse(String(e.data))))
   sock.onclose = () => {
     if (ws !== sock) return
     ws = null
@@ -120,6 +131,7 @@ function onMessage(m: Record<string, unknown>): void {
       retry = 1000
       setOnline()
       ws?.send(JSON.stringify({ t: 'hello' }))
+      deskStart()
       if (openId) ws?.send(JSON.stringify({ t: 'watch', id: openId }))
       return
     case 'chats':
@@ -145,7 +157,48 @@ function onMessage(m: Record<string, unknown>): void {
     case 'created':
       location.hash = '#/c/' + encodeURIComponent(String(m.id))
       return
+    case 'tunnel':
+      return onTunnel(String(m.url))
+    case 'desk.info':
+    case 'desk.off':
+      return deskMessage(m)
   }
+}
+
+/* ---------------- away from the Wi-Fi ---------------- */
+
+/*
+ * The computer can also be reached over the Internet (a Cloudflare tunnel, remote.zig). Links into
+ * this page: #pair=<PIN> from the QR code on the computer (pairs at once), #token=<token> from this
+ * page on the Wi-Fi (the same phone on the tunnel's address: a page's token stays with its origin).
+ */
+let qrPin = ''
+const linked = /^#(pair|token)=([\w-]+)$/.exec(location.hash)
+if (linked) {
+  history.replaceState(null, '', location.pathname + location.search)
+  if (linked[1] === 'token') localStorage.setItem(TOKEN_KEY, linked[2])
+  else if (!localStorage.getItem(TOKEN_KEY)) qrPin = linked[2]
+}
+
+/** the tunnel's address, when this page is not already on it */
+let tunnelLink = ''
+function onTunnel(url: string): void {
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (!url.startsWith('https://') || new URL(url).origin === location.origin || !token) return
+  tunnelLink = `${url}/#token=${token}`
+  // the app opens it from then on, and comes back to the Wi-Fi when it stops working
+  bridge?.saveTunnel?.(tunnelLink)
+  renderNet()
+}
+
+/** A browser on the Wi-Fi: a button to the tunnel's address, to bookmark for when away. */
+function renderNet(): void {
+  if (!refs.net) return
+  refs.net.replaceChildren(
+    tunnelLink && !bridge?.saveTunnel
+      ? h('a', { class: 'btn small', href: tunnelLink, title: t('The link for when you are away from this Wi-Fi: open it, then bookmark it', 'Link dùng khi ra ngoài: mở rồi lưu dấu trang') }, t('🌐 Away link', '🌐 Link ra ngoài'))
+      : ''
+  )
 }
 
 function setOnline(): void {
@@ -176,9 +229,11 @@ function route(): void {
   }
   refs = {}
   app.replaceChildren()
+  if (hash !== '/desk') deskStop()
   if (!localStorage.getItem(TOKEN_KEY)) return pairView()
   if (openId) return chatView()
   if (hash === '/new') return newView()
+  if (hash === '/desk') return deskView(app, deskSend, () => (location.hash = '#/'))
   listView()
 }
 window.addEventListener('hashchange', route)
@@ -196,7 +251,6 @@ function pairView(): void {
     if (pin.length !== 6) return void (err.textContent = t('The PIN has 6 digits', 'PIN gồm 6 chữ số'))
     btn.setAttribute('disabled', '')
     err.textContent = ''
-    const bridge = (window as unknown as { VibeAndroid?: { deviceName(): string } }).VibeAndroid
     const name = bridge?.deviceName() ?? (/Android[^;)]*;\s*([^;)]+)/.exec(navigator.userAgent)?.[1] || 'Phone')
     try {
       const res = await fetch('/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin, name }) })
@@ -211,6 +265,11 @@ function pairView(): void {
     }
   }
   input.addEventListener('keydown', (e) => e.key === 'Enter' && void pair())
+  if (qrPin) {
+    input.value = qrPin
+    qrPin = ''
+    void pair()
+  }
   app.append(
     h(
       'div',
@@ -247,12 +306,13 @@ function listView(): void {
     h(
       'div',
       { class: 'view' },
-      h('header', { class: 'bar' }, h('div', { class: 'bar-title' }, 'VIBE CODE'), h('button', { class: 'btn small primary', onclick: () => (location.hash = '#/new') }, '+ ' + t('New chat', 'Chat mới'))),
+      h('header', { class: 'bar' }, h('div', { class: 'bar-title' }, 'VIBE CODE'), (refs.net = h('span')), h('button', { class: 'btn small', title: t("The computer's screen: mouse and keyboard", 'Màn hình máy tính: chuột và bàn phím'), onclick: () => (location.hash = '#/desk') }, '🖥 ' + t('Screen', 'Màn hình')), h('button', { class: 'btn small primary', onclick: () => (location.hash = '#/new') }, '+ ' + t('New chat', 'Chat mới'))),
       offlineBar(),
       refs.list
     )
   )
   renderList()
+  renderNet()
 }
 
 function renderList(): void {

@@ -5700,6 +5700,29 @@ html:lang(vi) .xterm-host.drop-hover::after { content: 'Thả vào để đính 
   margin-top: 4px;
   user-select: text;
 }
+.remote-opt {
+  margin-top: 10px;
+}
+.remote-qr {
+  display: block;
+  width: 180px;
+  height: 180px;
+  margin: 10px auto 0;
+  border-radius: 6px;
+}
+.remote-link {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .remote-pair {
   margin-top: 10px;
   width: 100%;

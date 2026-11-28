@@ -480,4 +480,15 @@ export interface RemoteState {
   pin: string | null
   pinUntil: number
   devices: { id: string; name: string; at: number; online: boolean }[]
+  /** phones may see the screen and use the mouse and keyboard */
+  desktop: boolean
+  /** reachable from the Internet too, through a Cloudflare quick tunnel */
+  tunnel: boolean
+  tunnelPhase: 'off' | 'download' | 'start' | 'up' | 'failed'
+  /** https://….trycloudflare.com once Cloudflare gave one (kept while it reconnects) */
+  tunnelUrl: string | null
+  tunnelError: string | null
+  /** cloudflared's download, in bytes */
+  tunnelDone: number
+  tunnelTotal: number
 }
